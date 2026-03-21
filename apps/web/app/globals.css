@@ -1,0 +1,491 @@
+@import "@rainbow-me/rainbowkit/styles.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --arena-bg: #0A0A0A;
+  --arena-surface: #0F0F0F;
+  --arena-panel: #141414;
+  --arena-panel-strong: #1A1A1A;
+  --arena-ink: #FFFFFF;
+  --arena-muted: #9CA3AF;
+  --arena-accent: #14B8A6;
+  --arena-accent-soft: rgba(20, 184, 166, 0.15);
+  --arena-accent-glow: rgba(20, 184, 166, 0.5);
+  --arena-teal: #14B8A6;
+  --arena-teal-soft: rgba(20, 184, 166, 0.15);
+  --arena-gold: #F59E0B;
+  --arena-gold-soft: rgba(245, 158, 11, 0.15);
+  --arena-danger: #EF4444;
+  --arena-danger-soft: rgba(239, 68, 68, 0.18);
+  --arena-success: #10B981;
+  --arena-success-soft: rgba(16, 185, 129, 0.18);
+  --arena-stroke: rgba(255, 255, 255, 0.06);
+  --arena-stroke-strong: rgba(255, 255, 255, 0.12);
+  --arena-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --arena-shadow-glow: 0 0 20px rgba(20, 184, 166, 0.3), 0 0 40px rgba(20, 184, 166, 0.15);
+}
+
+body {
+  @apply font-body text-[color:var(--arena-ink)];
+  min-height: 100vh;
+  background-color: var(--arena-bg);
+}
+
+.arena-shell {
+  background: linear-gradient(180deg, rgba(10, 10, 10, 0.9), rgba(10, 10, 10, 0.98));
+}
+
+.arena-panel {
+  background: var(--arena-panel);
+  border: 1px solid var(--arena-stroke);
+  box-shadow:
+    var(--arena-shadow),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+}
+
+.arena-panel-strong {
+  background: var(--arena-panel-strong);
+  border: 1px solid var(--arena-stroke);
+  box-shadow:
+    var(--arena-shadow),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+.arena-panel-soft {
+  background: rgba(20, 20, 20, 0.6);
+  border: 1px solid var(--arena-stroke);
+  backdrop-filter: blur(8px);
+}
+
+.arena-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border-radius: 8px;
+  border: 1px solid var(--arena-stroke);
+  padding: 0.35rem 0.9rem;
+  font-size: 0.62rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--arena-muted);
+  background: rgba(15, 15, 15, 0.8);
+}
+
+.arena-label {
+  font-size: 0.65rem;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--arena-muted);
+}
+
+.arena-field {
+  position: relative;
+  border-radius: 20px;
+  border: 1px solid var(--arena-stroke);
+  background: var(--arena-panel);
+  box-shadow: var(--arena-shadow);
+}
+
+.arena-field-grid {
+  position: relative;
+  padding: 2.5rem 1.5rem;
+}
+
+@media (min-width: 768px) {
+  .arena-field-grid {
+    padding: 3rem 2rem;
+  }
+}
+
+.arena-slot-trigger {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 88px;
+  transition: opacity 160ms ease;
+  transform: translateZ(0);
+}
+
+.arena-slot-core {
+  position: relative;
+  display: flex;
+  height: 68px;
+  width: 90px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: linear-gradient(180deg, rgba(30, 30, 30, 0.95), rgba(18, 18, 18, 0.95));
+  box-shadow:
+    inset 0 1px 2px rgba(255, 255, 255, 0.08),
+    inset 0 -1px 2px rgba(0, 0, 0, 0.4),
+    0 2px 8px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+  transition:
+    transform 200ms cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 200ms ease,
+    box-shadow 200ms ease,
+    background 200ms ease;
+}
+
+.arena-slot-empty {
+  background: linear-gradient(180deg, rgba(25, 25, 25, 0.8), rgba(16, 16, 16, 0.8));
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, 0.06);
+  box-shadow:
+    inset 0 1px 2px rgba(255, 255, 255, 0.04),
+    inset 0 -1px 2px rgba(0, 0, 0, 0.3),
+    0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+.arena-slot-filled {
+  border-color: var(--arena-accent);
+  background:
+    linear-gradient(180deg, rgba(35, 35, 35, 0.95), rgba(22, 22, 22, 0.95)),
+    radial-gradient(circle at center, var(--arena-accent-soft), transparent 60%);
+  box-shadow:
+    inset 0 1px 2px var(--arena-accent-soft),
+    inset 0 -1px 2px rgba(0, 0, 0, 0.4),
+    0 0 8px var(--arena-accent-glow),
+    0 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+.arena-slot-trigger:hover .arena-slot-core {
+  border-color: var(--arena-accent);
+  transform: translateY(-2px);
+  background: linear-gradient(180deg, rgba(38, 38, 38, 0.95), rgba(25, 25, 25, 0.95));
+  box-shadow:
+    inset 0 1px 3px var(--arena-accent-soft),
+    inset 0 -1px 2px rgba(0, 0, 0, 0.4),
+    0 0 12px var(--arena-accent-glow),
+    0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+.arena-slot-focused .arena-slot-core {
+  border-color: var(--arena-accent);
+  background:
+    linear-gradient(180deg, rgba(40, 40, 40, 0.95), rgba(28, 28, 28, 0.95)),
+    radial-gradient(circle at center, var(--arena-accent-soft), transparent 60%);
+  box-shadow:
+    inset 0 1px 3px var(--arena-accent-soft),
+    inset 0 -1px 2px rgba(0, 0, 0, 0.4),
+    0 0 0 2px var(--arena-accent),
+    0 0 16px var(--arena-accent-glow),
+    0 0 32px var(--arena-accent-glow),
+    0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.arena-slot-dim {
+  opacity: 0.55;
+}
+
+.arena-slot-pulse {
+  animation: arena-slot-pulse 200ms ease;
+}
+
+.arena-slot-plus {
+  font-size: 1.5rem;
+  font-weight: 300;
+  color: var(--arena-muted);
+  transition: transform 160ms ease, color 160ms ease;
+}
+
+.arena-slot-trigger:hover .arena-slot-plus {
+  transform: scale(1.08);
+  color: var(--arena-ink);
+}
+
+.arena-slot-asset {
+  display: flex;
+  height: 48px;
+  width: 72px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--arena-accent);
+  text-shadow:
+    0 0 8px var(--arena-accent-glow),
+    0 1px 2px rgba(0, 0, 0, 0.8);
+  box-shadow: none;
+}
+
+.arena-slot-chip {
+  position: absolute;
+  bottom: -0.4rem;
+  right: -0.3rem;
+  border-radius: 5px;
+  border: 1px solid var(--arena-gold);
+  background: linear-gradient(180deg, rgba(16, 16, 16, 0.95), rgba(10, 10, 10, 0.95));
+  padding: 0.2rem 0.4rem;
+  font-size: 0.55rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--arena-gold);
+  text-shadow: 0 0 6px var(--arena-gold-soft);
+  box-shadow:
+    inset 0 1px 1px var(--arena-gold-soft),
+    inset 0 -1px 1px rgba(0, 0, 0, 0.3),
+    0 0 8px var(--arena-gold-soft);
+}
+
+.arena-slot-delta {
+  position: absolute;
+  top: -0.4rem;
+  left: -0.3rem;
+  border-radius: 5px;
+  border: 1px solid var(--arena-accent);
+  background: linear-gradient(180deg, rgba(16, 16, 16, 0.95), rgba(10, 10, 10, 0.95));
+  padding: 0.18rem 0.35rem;
+  font-size: 0.55rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--arena-accent);
+  text-shadow: 0 0 6px var(--arena-accent-glow);
+  box-shadow:
+    inset 0 1px 1px var(--arena-accent-soft),
+    inset 0 -1px 1px rgba(0, 0, 0, 0.3),
+    0 0 8px var(--arena-accent-glow);
+}
+
+.arena-slot-price {
+  position: absolute;
+  bottom: -0.4rem;
+  left: -0.3rem;
+  border-radius: 5px;
+  border: 1px solid var(--arena-accent);
+  background: linear-gradient(180deg, rgba(16, 16, 16, 0.95), rgba(10, 10, 10, 0.95));
+  padding: 0.2rem 0.4rem;
+  font-size: 0.55rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--arena-accent);
+  text-shadow: 0 0 6px var(--arena-accent-glow);
+  box-shadow:
+    inset 0 1px 1px var(--arena-accent-soft),
+    inset 0 -1px 1px rgba(0, 0, 0, 0.3),
+    0 0 8px var(--arena-accent-glow);
+}
+
+.arena-slot-actions {
+  position: absolute;
+  top: -0.2rem;
+  right: -0.3rem;
+  display: flex;
+  gap: 0.35rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease;
+}
+
+.arena-slot-action {
+  border-radius: 6px;
+  border: 1px solid var(--arena-stroke);
+  background: linear-gradient(180deg, rgba(14, 14, 14, 0.95), rgba(8, 8, 8, 0.95));
+  padding: 0.25rem 0.5rem;
+  font-size: 0.55rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--arena-muted);
+  transition:
+    border-color 200ms ease,
+    color 200ms ease,
+    box-shadow 200ms ease,
+    background 200ms ease;
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.04),
+    inset 0 -1px 1px rgba(0, 0, 0, 0.25);
+}
+
+.arena-slot-action:hover {
+  border-color: var(--arena-accent);
+  color: var(--arena-accent);
+  background: linear-gradient(180deg, rgba(16, 16, 16, 0.95), rgba(10, 10, 10, 0.95));
+  box-shadow:
+    inset 0 1px 1px var(--arena-accent-soft),
+    inset 0 -1px 1px rgba(0, 0, 0, 0.3),
+    0 0 8px var(--arena-accent-glow);
+}
+
+.arena-slot-trigger:hover .arena-slot-actions,
+.arena-slot-trigger:focus-within .arena-slot-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.arena-slot-hint {
+  font-size: 0.55rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--arena-muted);
+}
+
+.arena-slot-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translate(-50%, 6px);
+  border-radius: 8px;
+  border: 1px solid var(--arena-stroke);
+  background: rgba(10, 10, 10, 0.98);
+  backdrop-filter: blur(8px);
+  padding: 0.4rem 0.7rem;
+  font-size: 0.55rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--arena-muted);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease, transform 200ms ease;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+.arena-slot-trigger:hover .arena-slot-tooltip,
+.arena-slot-trigger:focus-within .arena-slot-tooltip {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.arena-market-row {
+  border-radius: 12px;
+  border: 1px solid var(--arena-stroke);
+  background: rgba(20, 20, 20, 0.7);
+  cursor: pointer;
+  transition:
+    transform 200ms cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 200ms ease,
+    box-shadow 200ms ease,
+    background 200ms ease;
+}
+
+.arena-market-row:hover {
+  border-color: var(--arena-stroke-strong);
+  background: rgba(25, 25, 25, 0.85);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.arena-market-row-selected {
+  border-color: var(--arena-accent);
+  background:
+    linear-gradient(135deg, rgba(0, 229, 255, 0.08), rgba(0, 229, 255, 0.03)),
+    rgba(20, 20, 20, 0.9);
+  box-shadow:
+    0 0 0 1px var(--arena-accent),
+    0 0 16px rgba(0, 229, 255, 0.3),
+    0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.arena-market-row-disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+@keyframes arena-slot-pulse {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.arena-divider {
+  border-top: 1px solid var(--arena-stroke);
+}
+
+.arena-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  border-radius: 12px;
+  border: 1px solid var(--arena-stroke);
+  padding: 1rem;
+  background: rgba(15, 15, 15, 0.7);
+  transition: background 200ms ease, border-color 200ms ease;
+}
+
+.arena-metric:hover {
+  background: rgba(20, 20, 20, 0.85);
+  border-color: var(--arena-stroke-strong);
+}
+
+.arena-metric span {
+  color: var(--arena-muted);
+  font-size: 0.7rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.arena-formation-select {
+  position: absolute;
+  top: 1rem;
+  right: 1.2rem;
+  z-index: 2;
+}
+
+.arena-formation-control {
+  border: none;
+  border-radius: 999px;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--arena-ink);
+  background: rgba(10, 10, 10, 0.6);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 6px 16px rgba(0, 0, 0, 0.45);
+}
+
+.arena-formation-control:focus {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--arena-accent),
+    0 8px 18px rgba(0, 0, 0, 0.55);
+}
+
+.arena-formation-menu {
+  margin-top: 0.5rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.arena-formation-option {
+  border: none;
+  border-radius: 999px;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--arena-ink);
+  background: transparent;
+  text-align: left;
+}
+
+.arena-formation-option:hover,
+.arena-formation-option:focus {
+  outline: none;
+  background: var(--arena-accent);
+  color: #021a18;
+}

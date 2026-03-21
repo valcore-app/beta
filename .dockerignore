@@ -1,0 +1,15 @@
+node_modules
+.pnpm-store
+.git
+.github
+info
+coverage
+apps/**/.next
+apps/**/out
+apps/**/dist
+apps/contracts/artifacts
+apps/contracts/cache
+.env
+.env.*
+!.env.example
+*.log
