@@ -1,0 +1,45 @@
+{
+  "name": "valcore-platform",
+  "private": true,
+  "packageManager": "pnpm@9.12.0",
+  "scripts": {
+    "dev": "pnpm -r dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "format": "pnpm -r format",
+    "contracts:node": "pnpm --filter contracts node",
+    "contracts:deploy:local": "pnpm --filter contracts deploy:local",
+    "contracts:deploy:testnet": "pnpm --filter contracts deploy:testnet",
+    "contracts:export:abi": "pnpm --filter contracts export:abi",
+    "contracts:faucet": "pnpm --filter contracts faucet",
+    "contracts:seed:lineup": "pnpm --filter contracts seed:lineup",
+    "contracts:claim": "pnpm --filter contracts claim",
+    "contracts:finalize": "pnpm --filter contracts finalize",
+    "contracts:transition": "pnpm --filter contracts transition",
+    "contracts:lock": "pnpm --filter contracts lock",
+    "contracts:start": "pnpm --filter contracts start",
+    "oracle:week": "pnpm --filter oracle job:week",
+    "oracle:finalize": "pnpm --filter oracle job:finalize",
+    "oracle:transition": "pnpm --filter oracle job:transition",
+    "audit:prod:high": "pnpm audit --prod --audit-level high",
+    "ci:verify": "pnpm -r build && pnpm --filter contracts test && pnpm --filter contracts-starknet test && pnpm --filter oracle test && pnpm --filter web test:unit && pnpm --filter web test:smoke && pnpm audit:prod:high",
+    "publish:dev:starknet": "node tooling/publish-target/publish-targets.mjs --branch dev --targets starknet",
+    "publish:dev:sepolia": "node tooling/publish-target/publish-targets.mjs --branch dev --targets sepolia",
+    "publish:dev:avalanche": "node tooling/publish-target/publish-targets.mjs --branch dev --targets avalanche",
+    "publish:main:starknet": "node tooling/publish-target/publish-targets.mjs --branch main --targets starknet",
+    "publish:main:sepolia": "node tooling/publish-target/publish-targets.mjs --branch main --targets sepolia",
+    "publish:main:avalanche": "node tooling/publish-target/publish-targets.mjs --branch main --targets avalanche"
+  },
+  "pnpm": {
+    "overrides": {
+      "hono": "^4.11.7",
+      "lodash": "^4.17.23",
+      "axios": "^1.13.5"
+    }
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.0",
+    "typescript": "5.4.5"
+  }
+}

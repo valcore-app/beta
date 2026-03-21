@@ -1,0 +1,31 @@
+{
+  "name": "contracts",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "hardhat compile",
+    "test": "hardhat test",
+    "node": "hardhat node",
+    "deploy:local": "hardhat run scripts/deploy.ts",
+    "deploy:testnet": "hardhat run scripts/deploy.ts",
+    "export:abi": "hardhat run scripts/export-abi.ts --network localhost",
+    "faucet": "hardhat run scripts/faucet.ts",
+    "seed:lineup": "hardhat run scripts/seed-lineup.ts",
+    "claim": "hardhat run scripts/claim.ts",
+    "finalize": "hardhat run scripts/finalize.ts",
+    "transition": "hardhat run scripts/transition.ts",
+    "lock": "hardhat run scripts/lock.ts",
+    "start": "hardhat run scripts/start.ts"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "5.0.2",
+    "@types/pg": "^8.11.10",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "5.0.0",
+    "dotenv": "16.4.5",
+    "hardhat": "2.22.11",
+    "typescript": "5.4.5"
+  }
+}
