@@ -81,7 +81,6 @@ export function Hud() {
   );
   const toastTimer = useRef<number | null>(null);
   const [playerDisplayName, setPlayerDisplayName] = useState<string | null>(null);
-  const [profileLoading, setProfileLoading] = useState(false);
   const [playerProfileLookupState, setPlayerProfileLookupState] =
     useState<PlayerProfileLookupState>("idle");
   const [playerNameModalOpen, setPlayerNameModalOpen] = useState(false);
@@ -129,7 +128,6 @@ export function Hud() {
     ].join("\n");
 
   const fetchPlayerProfile = useCallback(async (walletAddress: string) => {
-    setProfileLoading(true);
     setPlayerProfileLookupState("loading");
     try {
       const res = await fetch(`${ORACLE_URL}/strategists/${walletAddress.toLowerCase()}/profile`, {
@@ -154,8 +152,6 @@ export function Hud() {
     } catch {
       setPlayerProfileLookupState("error");
       return null;
-    } finally {
-      setProfileLoading(false);
     }
   }, []);
 
@@ -734,7 +730,7 @@ export function Hud() {
   const movesTotal = moves?.total ?? 0;
   const isWeekActive = week?.status === "ACTIVE";
   const showGuideButton = showMoves;
-  const showMovesPanel = showMoves && isWeekActive && moves !== null;
+  const showMovesPanel = showMoves && isWeekActive;
 
   const openProtocolGuide = (section: "tactical-moves" | "welcome", markSeen = false) => {
     if (typeof window === "undefined") return;

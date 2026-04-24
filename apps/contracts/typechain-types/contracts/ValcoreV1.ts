@@ -34,31 +34,41 @@ export interface ValcoreV1Interface extends Interface {
       | "PAUSER_ROLE"
       | "REWARD_SWEEP_DELAY"
       | "approveFinalization"
+      | "approveFinalizationWithIntent"
       | "claim"
       | "commitLineup"
       | "createWeek"
+      | "createWeekWithIntent"
       | "emergencyExit"
       | "feeBps"
       | "finalizeWeek"
+      | "finalizeWeekWithIntent"
       | "forceFinalizeWeek"
+      | "forceFinalizeWeekWithIntent"
       | "forceLockWeek"
+      | "forceLockWeekWithIntent"
       | "forceStartWeek"
+      | "forceStartWeekWithIntent"
       | "getRoleAdmin"
       | "grantRole"
       | "hasRole"
+      | "lifecycleIntentExecuted"
       | "lockWeek"
+      | "lockWeekWithIntent"
       | "minDeposit"
       | "pause"
       | "paused"
       | "positions"
       | "principalRatioBps"
       | "rejectFinalization"
+      | "rejectFinalizationWithIntent"
       | "renounceRole"
       | "revokeRole"
       | "rewardSweepAvailableAt"
       | "setTestMode"
       | "stablecoin"
       | "startWeek"
+      | "startWeekWithIntent"
       | "supportsInterface"
       | "swapLineup"
       | "sweepExpiredReward"
@@ -72,6 +82,7 @@ export interface ValcoreV1Interface extends Interface {
     nameOrSignatureOrTopic:
       | "Claimed"
       | "EmergencyExit"
+      | "LifecycleIntentConsumed"
       | "LineupCommitted"
       | "LineupSwapped"
       | "LineupUpdated"
@@ -118,6 +129,10 @@ export interface ValcoreV1Interface extends Interface {
     values: [BigNumberish]
   ): string;
   encodeFunctionData(
+    functionFragment: "approveFinalizationWithIntent",
+    values: [BytesLike, BigNumberish]
+  ): string;
+  encodeFunctionData(
     functionFragment: "claim",
     values: [
       BigNumberish,
@@ -136,6 +151,10 @@ export interface ValcoreV1Interface extends Interface {
     values: [BigNumberish, BigNumberish, BigNumberish, BigNumberish]
   ): string;
   encodeFunctionData(
+    functionFragment: "createWeekWithIntent",
+    values: [BytesLike, BigNumberish, BigNumberish, BigNumberish, BigNumberish]
+  ): string;
+  encodeFunctionData(
     functionFragment: "emergencyExit",
     values: [BigNumberish]
   ): string;
@@ -145,16 +164,32 @@ export interface ValcoreV1Interface extends Interface {
     values: [BigNumberish, BytesLike, BytesLike, BigNumberish]
   ): string;
   encodeFunctionData(
+    functionFragment: "finalizeWeekWithIntent",
+    values: [BytesLike, BigNumberish, BytesLike, BytesLike, BigNumberish]
+  ): string;
+  encodeFunctionData(
     functionFragment: "forceFinalizeWeek",
     values: [BigNumberish, BytesLike, BytesLike, BigNumberish]
+  ): string;
+  encodeFunctionData(
+    functionFragment: "forceFinalizeWeekWithIntent",
+    values: [BytesLike, BigNumberish, BytesLike, BytesLike, BigNumberish]
   ): string;
   encodeFunctionData(
     functionFragment: "forceLockWeek",
     values: [BigNumberish]
   ): string;
   encodeFunctionData(
+    functionFragment: "forceLockWeekWithIntent",
+    values: [BytesLike, BigNumberish]
+  ): string;
+  encodeFunctionData(
     functionFragment: "forceStartWeek",
     values: [BigNumberish]
+  ): string;
+  encodeFunctionData(
+    functionFragment: "forceStartWeekWithIntent",
+    values: [BytesLike, BigNumberish]
   ): string;
   encodeFunctionData(
     functionFragment: "getRoleAdmin",
@@ -169,8 +204,16 @@ export interface ValcoreV1Interface extends Interface {
     values: [BytesLike, AddressLike]
   ): string;
   encodeFunctionData(
+    functionFragment: "lifecycleIntentExecuted",
+    values: [BytesLike]
+  ): string;
+  encodeFunctionData(
     functionFragment: "lockWeek",
     values: [BigNumberish]
+  ): string;
+  encodeFunctionData(
+    functionFragment: "lockWeekWithIntent",
+    values: [BytesLike, BigNumberish]
   ): string;
   encodeFunctionData(
     functionFragment: "minDeposit",
@@ -189,6 +232,10 @@ export interface ValcoreV1Interface extends Interface {
   encodeFunctionData(
     functionFragment: "rejectFinalization",
     values: [BigNumberish]
+  ): string;
+  encodeFunctionData(
+    functionFragment: "rejectFinalizationWithIntent",
+    values: [BytesLike, BigNumberish]
   ): string;
   encodeFunctionData(
     functionFragment: "renounceRole",
@@ -213,6 +260,10 @@ export interface ValcoreV1Interface extends Interface {
   encodeFunctionData(
     functionFragment: "startWeek",
     values: [BigNumberish]
+  ): string;
+  encodeFunctionData(
+    functionFragment: "startWeekWithIntent",
+    values: [BytesLike, BigNumberish]
   ): string;
   encodeFunctionData(
     functionFragment: "supportsInterface",
@@ -267,12 +318,20 @@ export interface ValcoreV1Interface extends Interface {
     functionFragment: "approveFinalization",
     data: BytesLike
   ): Result;
+  decodeFunctionResult(
+    functionFragment: "approveFinalizationWithIntent",
+    data: BytesLike
+  ): Result;
   decodeFunctionResult(functionFragment: "claim", data: BytesLike): Result;
   decodeFunctionResult(
     functionFragment: "commitLineup",
     data: BytesLike
   ): Result;
   decodeFunctionResult(functionFragment: "createWeek", data: BytesLike): Result;
+  decodeFunctionResult(
+    functionFragment: "createWeekWithIntent",
+    data: BytesLike
+  ): Result;
   decodeFunctionResult(
     functionFragment: "emergencyExit",
     data: BytesLike
@@ -283,7 +342,15 @@ export interface ValcoreV1Interface extends Interface {
     data: BytesLike
   ): Result;
   decodeFunctionResult(
+    functionFragment: "finalizeWeekWithIntent",
+    data: BytesLike
+  ): Result;
+  decodeFunctionResult(
     functionFragment: "forceFinalizeWeek",
+    data: BytesLike
+  ): Result;
+  decodeFunctionResult(
+    functionFragment: "forceFinalizeWeekWithIntent",
     data: BytesLike
   ): Result;
   decodeFunctionResult(
@@ -291,7 +358,15 @@ export interface ValcoreV1Interface extends Interface {
     data: BytesLike
   ): Result;
   decodeFunctionResult(
+    functionFragment: "forceLockWeekWithIntent",
+    data: BytesLike
+  ): Result;
+  decodeFunctionResult(
     functionFragment: "forceStartWeek",
+    data: BytesLike
+  ): Result;
+  decodeFunctionResult(
+    functionFragment: "forceStartWeekWithIntent",
     data: BytesLike
   ): Result;
   decodeFunctionResult(
@@ -300,7 +375,15 @@ export interface ValcoreV1Interface extends Interface {
   ): Result;
   decodeFunctionResult(functionFragment: "grantRole", data: BytesLike): Result;
   decodeFunctionResult(functionFragment: "hasRole", data: BytesLike): Result;
+  decodeFunctionResult(
+    functionFragment: "lifecycleIntentExecuted",
+    data: BytesLike
+  ): Result;
   decodeFunctionResult(functionFragment: "lockWeek", data: BytesLike): Result;
+  decodeFunctionResult(
+    functionFragment: "lockWeekWithIntent",
+    data: BytesLike
+  ): Result;
   decodeFunctionResult(functionFragment: "minDeposit", data: BytesLike): Result;
   decodeFunctionResult(functionFragment: "pause", data: BytesLike): Result;
   decodeFunctionResult(functionFragment: "paused", data: BytesLike): Result;
@@ -311,6 +394,10 @@ export interface ValcoreV1Interface extends Interface {
   ): Result;
   decodeFunctionResult(
     functionFragment: "rejectFinalization",
+    data: BytesLike
+  ): Result;
+  decodeFunctionResult(
+    functionFragment: "rejectFinalizationWithIntent",
     data: BytesLike
   ): Result;
   decodeFunctionResult(
@@ -328,6 +415,10 @@ export interface ValcoreV1Interface extends Interface {
   ): Result;
   decodeFunctionResult(functionFragment: "stablecoin", data: BytesLike): Result;
   decodeFunctionResult(functionFragment: "startWeek", data: BytesLike): Result;
+  decodeFunctionResult(
+    functionFragment: "startWeekWithIntent",
+    data: BytesLike
+  ): Result;
   decodeFunctionResult(
     functionFragment: "supportsInterface",
     data: BytesLike
@@ -372,6 +463,31 @@ export namespace EmergencyExitEvent {
     weekId: bigint;
     user: string;
     amount: bigint;
+  }
+  export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>;
+  export type Filter = TypedDeferredTopicFilter<Event>;
+  export type Log = TypedEventLog<Event>;
+  export type LogDescription = TypedLogDescription<Event>;
+}
+
+export namespace LifecycleIntentConsumedEvent {
+  export type InputTuple = [
+    intentId: BytesLike,
+    action: BigNumberish,
+    weekId: BigNumberish,
+    caller: AddressLike
+  ];
+  export type OutputTuple = [
+    intentId: string,
+    action: bigint,
+    weekId: bigint,
+    caller: string
+  ];
+  export interface OutputObject {
+    intentId: string;
+    action: bigint;
+    weekId: bigint;
+    caller: string;
   }
   export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>;
   export type Filter = TypedDeferredTopicFilter<Event>;
@@ -762,6 +878,12 @@ export interface ValcoreV1 extends BaseContract {
     "nonpayable"
   >;
 
+  approveFinalizationWithIntent: TypedContractMethod<
+    [intentId: BytesLike, weekId: BigNumberish],
+    [void],
+    "nonpayable"
+  >;
+
   claim: TypedContractMethod<
     [
       weekId: BigNumberish,
@@ -791,6 +913,18 @@ export interface ValcoreV1 extends BaseContract {
     "nonpayable"
   >;
 
+  createWeekWithIntent: TypedContractMethod<
+    [
+      intentId: BytesLike,
+      weekId: BigNumberish,
+      startAt: BigNumberish,
+      lockAt: BigNumberish,
+      endAt: BigNumberish
+    ],
+    [void],
+    "nonpayable"
+  >;
+
   emergencyExit: TypedContractMethod<
     [weekId: BigNumberish],
     [void],
@@ -801,6 +935,18 @@ export interface ValcoreV1 extends BaseContract {
 
   finalizeWeek: TypedContractMethod<
     [
+      weekId: BigNumberish,
+      merkleRoot: BytesLike,
+      metadataHash: BytesLike,
+      retainedFee: BigNumberish
+    ],
+    [void],
+    "nonpayable"
+  >;
+
+  finalizeWeekWithIntent: TypedContractMethod<
+    [
+      intentId: BytesLike,
       weekId: BigNumberish,
       merkleRoot: BytesLike,
       metadataHash: BytesLike,
@@ -821,14 +967,38 @@ export interface ValcoreV1 extends BaseContract {
     "nonpayable"
   >;
 
+  forceFinalizeWeekWithIntent: TypedContractMethod<
+    [
+      intentId: BytesLike,
+      weekId: BigNumberish,
+      merkleRoot: BytesLike,
+      metadataHash: BytesLike,
+      retainedFee: BigNumberish
+    ],
+    [void],
+    "nonpayable"
+  >;
+
   forceLockWeek: TypedContractMethod<
     [weekId: BigNumberish],
     [void],
     "nonpayable"
   >;
 
+  forceLockWeekWithIntent: TypedContractMethod<
+    [intentId: BytesLike, weekId: BigNumberish],
+    [void],
+    "nonpayable"
+  >;
+
   forceStartWeek: TypedContractMethod<
     [weekId: BigNumberish],
+    [void],
+    "nonpayable"
+  >;
+
+  forceStartWeekWithIntent: TypedContractMethod<
+    [intentId: BytesLike, weekId: BigNumberish],
     [void],
     "nonpayable"
   >;
@@ -847,7 +1017,19 @@ export interface ValcoreV1 extends BaseContract {
     "view"
   >;
 
+  lifecycleIntentExecuted: TypedContractMethod<
+    [arg0: BytesLike],
+    [boolean],
+    "view"
+  >;
+
   lockWeek: TypedContractMethod<[weekId: BigNumberish], [void], "nonpayable">;
+
+  lockWeekWithIntent: TypedContractMethod<
+    [intentId: BytesLike, weekId: BigNumberish],
+    [void],
+    "nonpayable"
+  >;
 
   minDeposit: TypedContractMethod<[], [bigint], "view">;
 
@@ -878,6 +1060,12 @@ export interface ValcoreV1 extends BaseContract {
     "nonpayable"
   >;
 
+  rejectFinalizationWithIntent: TypedContractMethod<
+    [intentId: BytesLike, weekId: BigNumberish],
+    [void],
+    "nonpayable"
+  >;
+
   renounceRole: TypedContractMethod<
     [role: BytesLike, callerConfirmation: AddressLike],
     [void],
@@ -901,6 +1089,12 @@ export interface ValcoreV1 extends BaseContract {
   stablecoin: TypedContractMethod<[], [string], "view">;
 
   startWeek: TypedContractMethod<[weekId: BigNumberish], [void], "nonpayable">;
+
+  startWeekWithIntent: TypedContractMethod<
+    [intentId: BytesLike, weekId: BigNumberish],
+    [void],
+    "nonpayable"
+  >;
 
   supportsInterface: TypedContractMethod<
     [interfaceId: BytesLike],
@@ -990,6 +1184,13 @@ export interface ValcoreV1 extends BaseContract {
     nameOrSignature: "approveFinalization"
   ): TypedContractMethod<[weekId: BigNumberish], [void], "nonpayable">;
   getFunction(
+    nameOrSignature: "approveFinalizationWithIntent"
+  ): TypedContractMethod<
+    [intentId: BytesLike, weekId: BigNumberish],
+    [void],
+    "nonpayable"
+  >;
+  getFunction(
     nameOrSignature: "claim"
   ): TypedContractMethod<
     [
@@ -1022,6 +1223,19 @@ export interface ValcoreV1 extends BaseContract {
     "nonpayable"
   >;
   getFunction(
+    nameOrSignature: "createWeekWithIntent"
+  ): TypedContractMethod<
+    [
+      intentId: BytesLike,
+      weekId: BigNumberish,
+      startAt: BigNumberish,
+      lockAt: BigNumberish,
+      endAt: BigNumberish
+    ],
+    [void],
+    "nonpayable"
+  >;
+  getFunction(
     nameOrSignature: "emergencyExit"
   ): TypedContractMethod<[weekId: BigNumberish], [void], "nonpayable">;
   getFunction(
@@ -1031,6 +1245,19 @@ export interface ValcoreV1 extends BaseContract {
     nameOrSignature: "finalizeWeek"
   ): TypedContractMethod<
     [
+      weekId: BigNumberish,
+      merkleRoot: BytesLike,
+      metadataHash: BytesLike,
+      retainedFee: BigNumberish
+    ],
+    [void],
+    "nonpayable"
+  >;
+  getFunction(
+    nameOrSignature: "finalizeWeekWithIntent"
+  ): TypedContractMethod<
+    [
+      intentId: BytesLike,
       weekId: BigNumberish,
       merkleRoot: BytesLike,
       metadataHash: BytesLike,
@@ -1052,11 +1279,38 @@ export interface ValcoreV1 extends BaseContract {
     "nonpayable"
   >;
   getFunction(
+    nameOrSignature: "forceFinalizeWeekWithIntent"
+  ): TypedContractMethod<
+    [
+      intentId: BytesLike,
+      weekId: BigNumberish,
+      merkleRoot: BytesLike,
+      metadataHash: BytesLike,
+      retainedFee: BigNumberish
+    ],
+    [void],
+    "nonpayable"
+  >;
+  getFunction(
     nameOrSignature: "forceLockWeek"
   ): TypedContractMethod<[weekId: BigNumberish], [void], "nonpayable">;
   getFunction(
+    nameOrSignature: "forceLockWeekWithIntent"
+  ): TypedContractMethod<
+    [intentId: BytesLike, weekId: BigNumberish],
+    [void],
+    "nonpayable"
+  >;
+  getFunction(
     nameOrSignature: "forceStartWeek"
   ): TypedContractMethod<[weekId: BigNumberish], [void], "nonpayable">;
+  getFunction(
+    nameOrSignature: "forceStartWeekWithIntent"
+  ): TypedContractMethod<
+    [intentId: BytesLike, weekId: BigNumberish],
+    [void],
+    "nonpayable"
+  >;
   getFunction(
     nameOrSignature: "getRoleAdmin"
   ): TypedContractMethod<[role: BytesLike], [string], "view">;
@@ -1075,8 +1329,18 @@ export interface ValcoreV1 extends BaseContract {
     "view"
   >;
   getFunction(
+    nameOrSignature: "lifecycleIntentExecuted"
+  ): TypedContractMethod<[arg0: BytesLike], [boolean], "view">;
+  getFunction(
     nameOrSignature: "lockWeek"
   ): TypedContractMethod<[weekId: BigNumberish], [void], "nonpayable">;
+  getFunction(
+    nameOrSignature: "lockWeekWithIntent"
+  ): TypedContractMethod<
+    [intentId: BytesLike, weekId: BigNumberish],
+    [void],
+    "nonpayable"
+  >;
   getFunction(
     nameOrSignature: "minDeposit"
   ): TypedContractMethod<[], [bigint], "view">;
@@ -1109,6 +1373,13 @@ export interface ValcoreV1 extends BaseContract {
     nameOrSignature: "rejectFinalization"
   ): TypedContractMethod<[weekId: BigNumberish], [void], "nonpayable">;
   getFunction(
+    nameOrSignature: "rejectFinalizationWithIntent"
+  ): TypedContractMethod<
+    [intentId: BytesLike, weekId: BigNumberish],
+    [void],
+    "nonpayable"
+  >;
+  getFunction(
     nameOrSignature: "renounceRole"
   ): TypedContractMethod<
     [role: BytesLike, callerConfirmation: AddressLike],
@@ -1134,6 +1405,13 @@ export interface ValcoreV1 extends BaseContract {
   getFunction(
     nameOrSignature: "startWeek"
   ): TypedContractMethod<[weekId: BigNumberish], [void], "nonpayable">;
+  getFunction(
+    nameOrSignature: "startWeekWithIntent"
+  ): TypedContractMethod<
+    [intentId: BytesLike, weekId: BigNumberish],
+    [void],
+    "nonpayable"
+  >;
   getFunction(
     nameOrSignature: "supportsInterface"
   ): TypedContractMethod<[interfaceId: BytesLike], [boolean], "view">;
@@ -1210,6 +1488,13 @@ export interface ValcoreV1 extends BaseContract {
     EmergencyExitEvent.InputTuple,
     EmergencyExitEvent.OutputTuple,
     EmergencyExitEvent.OutputObject
+  >;
+  getEvent(
+    key: "LifecycleIntentConsumed"
+  ): TypedContractEvent<
+    LifecycleIntentConsumedEvent.InputTuple,
+    LifecycleIntentConsumedEvent.OutputTuple,
+    LifecycleIntentConsumedEvent.OutputObject
   >;
   getEvent(
     key: "LineupCommitted"
@@ -1352,6 +1637,17 @@ export interface ValcoreV1 extends BaseContract {
       EmergencyExitEvent.InputTuple,
       EmergencyExitEvent.OutputTuple,
       EmergencyExitEvent.OutputObject
+    >;
+
+    "LifecycleIntentConsumed(bytes32,uint8,uint256,address)": TypedContractEvent<
+      LifecycleIntentConsumedEvent.InputTuple,
+      LifecycleIntentConsumedEvent.OutputTuple,
+      LifecycleIntentConsumedEvent.OutputObject
+    >;
+    LifecycleIntentConsumed: TypedContractEvent<
+      LifecycleIntentConsumedEvent.InputTuple,
+      LifecycleIntentConsumedEvent.OutputTuple,
+      LifecycleIntentConsumedEvent.OutputObject
     >;
 
     "LineupCommitted(uint256,address,bytes32,uint256)": TypedContractEvent<

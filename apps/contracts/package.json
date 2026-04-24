@@ -8,6 +8,7 @@
     "node": "hardhat node",
     "deploy:local": "hardhat run scripts/deploy.ts",
     "deploy:testnet": "hardhat run scripts/deploy.ts",
+    "deploy:reactive": "hardhat run scripts/deploy-reactive.ts",
     "export:abi": "hardhat run scripts/export-abi.ts --network localhost",
     "faucet": "hardhat run scripts/faucet.ts",
     "seed:lineup": "hardhat run scripts/seed-lineup.ts",

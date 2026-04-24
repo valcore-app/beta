@@ -6,6 +6,7 @@ export type RetryConfig = {
   maxRetries?: number;
   backoffMs?: number;
   timeoutMs?: number;
+  maxDelayMs?: number;
 };
 
 export class ApiError extends Error {
@@ -47,7 +48,7 @@ export const retryWithBackoff = async <T>(
   fn: () => Promise<T>,
   config: RetryConfig = {},
 ): Promise<T> => {
-  const { maxRetries = 3, backoffMs = 1000 } = config;
+  const { maxRetries = 3, backoffMs = 1000, maxDelayMs = 30000 } = config;
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -63,6 +64,7 @@ export const retryWithBackoff = async <T>(
           // Respect provider cooldown hint when available.
           delay = Math.max(baseDelay, lastError.retryAfterMs ?? 15000);
         }
+        delay = Math.min(delay, maxDelayMs);
         // Retry without noisy logging
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
@@ -146,3 +148,4 @@ export const withConcurrency = async <T, R>(
   await Promise.all(workers);
   return results;
 };
+

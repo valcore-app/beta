@@ -640,8 +640,8 @@
       ]
     },
     "C:\\Users\\erkan\\Desktop\\Projects\\Valcore\\Valcore-core\\apps\\contracts-evm\\contracts\\ValcoreV1.sol": {
-      "lastModificationDate": 1774055484090,
-      "contentHash": "6af4ed34ebe2bc60977d927e8517ed0c",
+      "lastModificationDate": 1774222669088,
+      "contentHash": "6316fc9cc555a9a9b28e7c1a5fe70b06",
       "sourceName": "contracts/ValcoreV1.sol",
       "solcConfig": {
         "version": "0.8.24",
@@ -680,6 +680,461 @@
       ],
       "artifacts": [
         "ValcoreV1"
+      ]
+    },
+    "C:\\Users\\erkan\\Desktop\\Projects\\Valcore\\Valcore-core\\apps\\contracts-evm\\contracts\\interfaces\\IValcoreLifecycle.sol": {
+      "lastModificationDate": 1774489438492,
+      "contentHash": "ba850851d02618f4e5c23ee4cdfe8b7e",
+      "sourceName": "contracts/interfaces/IValcoreLifecycle.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [],
+      "versionPragmas": [
+        "^0.8.24"
+      ],
+      "artifacts": [
+        "IValcoreLifecycle"
+      ]
+    },
+    "C:\\Users\\erkan\\Desktop\\Projects\\Valcore\\Valcore-core\\apps\\contracts-evm\\contracts\\ValcoreReactiveReceiver.sol": {
+      "lastModificationDate": 1774657329158,
+      "contentHash": "a86157b93985b96deb3eca2595cbf95a",
+      "sourceName": "contracts/ValcoreReactiveReceiver.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "./interfaces/IValcoreLifecycle.sol",
+        "./reactive-lib/abstract-base/AbstractCallback.sol"
+      ],
+      "versionPragmas": [
+        "^0.8.24"
+      ],
+      "artifacts": [
+        "ValcoreReactiveReceiver"
+      ]
+    },
+    "C:\\Users\\erkan\\Desktop\\Projects\\Valcore\\Valcore-core\\apps\\contracts-evm\\contracts\\ValcoreReactiveDispatcher.sol": {
+      "lastModificationDate": 1776248743237,
+      "contentHash": "ce4696eff85bb1f94bae8903b92ca85e",
+      "sourceName": "contracts/ValcoreReactiveDispatcher.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "./reactive-lib/abstract-base/AbstractReactive.sol"
+      ],
+      "versionPragmas": [
+        "^0.8.24"
+      ],
+      "artifacts": [
+        "IValcoreReactiveTrigger",
+        "ValcoreReactiveDispatcher"
+      ]
+    },
+    "C:\\Users\\erkan\\Desktop\\Projects\\Valcore\\Valcore-core\\apps\\contracts-evm\\contracts\\reactive-lib\\abstract-base\\AbstractCallback.sol": {
+      "lastModificationDate": 1774632638783,
+      "contentHash": "eb2723e2d0e8b0b3d3bd8f96f33a8c93",
+      "sourceName": "contracts/reactive-lib/abstract-base/AbstractCallback.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "../interfaces/IPayable.sol",
+        "./AbstractPayer.sol"
+      ],
+      "versionPragmas": [
+        ">=0.8.0"
+      ],
+      "artifacts": [
+        "AbstractCallback"
+      ]
+    },
+    "C:\\Users\\erkan\\Desktop\\Projects\\Valcore\\Valcore-core\\apps\\contracts-evm\\contracts\\reactive-lib\\abstract-base\\AbstractPayer.sol": {
+      "lastModificationDate": 1774632612662,
+      "contentHash": "56c669e5ba8ed75df7e1bea38328641a",
+      "sourceName": "contracts/reactive-lib/abstract-base/AbstractPayer.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "../interfaces/IPayer.sol",
+        "../interfaces/IPayable.sol"
+      ],
+      "versionPragmas": [
+        ">=0.8.0"
+      ],
+      "artifacts": [
+        "AbstractPayer"
+      ]
+    },
+    "C:\\Users\\erkan\\Desktop\\Projects\\Valcore\\Valcore-core\\apps\\contracts-evm\\contracts\\reactive-lib\\interfaces\\IPayable.sol": {
+      "lastModificationDate": 1774632577448,
+      "contentHash": "5c57d6c071786f0ebd2a47a5b79f36c3",
+      "sourceName": "contracts/reactive-lib/interfaces/IPayable.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [],
+      "versionPragmas": [
+        ">=0.8.0"
+      ],
+      "artifacts": [
+        "IPayable"
+      ]
+    },
+    "C:\\Users\\erkan\\Desktop\\Projects\\Valcore\\Valcore-core\\apps\\contracts-evm\\contracts\\reactive-lib\\interfaces\\IPayer.sol": {
+      "lastModificationDate": 1774632585855,
+      "contentHash": "903e712f12a0236266de3224c7da8d93",
+      "sourceName": "contracts/reactive-lib/interfaces/IPayer.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [],
+      "versionPragmas": [
+        ">=0.8.0"
+      ],
+      "artifacts": [
+        "IPayer"
+      ]
+    },
+    "C:\\Users\\erkan\\Desktop\\Projects\\Valcore\\Valcore-core\\apps\\contracts-evm\\contracts\\reactive-lib\\interfaces\\ISystemContract.sol": {
+      "lastModificationDate": 1774632596779,
+      "contentHash": "e2e4b0e4fab5148a6c308359587cdeb4",
+      "sourceName": "contracts/reactive-lib/interfaces/ISystemContract.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "./IPayable.sol",
+        "./ISubscriptionService.sol"
+      ],
+      "versionPragmas": [
+        ">=0.8.0"
+      ],
+      "artifacts": [
+        "ISystemContract"
+      ]
+    },
+    "C:\\Users\\erkan\\Desktop\\Projects\\Valcore\\Valcore-core\\apps\\contracts-evm\\contracts\\reactive-lib\\interfaces\\ISubscriptionService.sol": {
+      "lastModificationDate": 1774632591676,
+      "contentHash": "1a4f31919ac12269bb3337559e2728d1",
+      "sourceName": "contracts/reactive-lib/interfaces/ISubscriptionService.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "./IPayable.sol"
+      ],
+      "versionPragmas": [
+        ">=0.8.0"
+      ],
+      "artifacts": [
+        "ISubscriptionService"
+      ]
+    },
+    "C:\\Users\\erkan\\Desktop\\Projects\\Valcore\\Valcore-core\\apps\\contracts-evm\\contracts\\reactive-lib\\abstract-base\\AbstractReactive.sol": {
+      "lastModificationDate": 1774632627117,
+      "contentHash": "628967d7e85bb381d661fc731f1e2236",
+      "sourceName": "contracts/reactive-lib/abstract-base/AbstractReactive.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "../interfaces/IReactive.sol",
+        "../interfaces/ISystemContract.sol",
+        "./AbstractPayer.sol"
+      ],
+      "versionPragmas": [
+        ">=0.8.0"
+      ],
+      "artifacts": [
+        "AbstractReactive"
+      ]
+    },
+    "C:\\Users\\erkan\\Desktop\\Projects\\Valcore\\Valcore-core\\apps\\contracts-evm\\contracts\\reactive-lib\\interfaces\\IReactive.sol": {
+      "lastModificationDate": 1774632604027,
+      "contentHash": "7ba6a1949aef320cabd0b68c85a75e2e",
+      "sourceName": "contracts/reactive-lib/interfaces/IReactive.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [
+        "./IPayer.sol"
+      ],
+      "versionPragmas": [
+        ">=0.8.0"
+      ],
+      "artifacts": [
+        "IReactive"
+      ]
+    },
+    "C:\\Users\\erkan\\Desktop\\Projects\\Valcore\\Valcore-core\\apps\\contracts-evm\\contracts\\ValcoreReactiveTrigger.sol": {
+      "lastModificationDate": 1774681530196,
+      "contentHash": "29b123cdd6abe7fbe64593edea9c4c62",
+      "sourceName": "contracts/ValcoreReactiveTrigger.sol",
+      "solcConfig": {
+        "version": "0.8.24",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "runs": 200
+          },
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.bytecode",
+                "evm.deployedBytecode",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          }
+        }
+      },
+      "imports": [],
+      "versionPragmas": [
+        "^0.8.24"
+      ],
+      "artifacts": [
+        "ValcoreReactiveTrigger"
       ]
     }
   }

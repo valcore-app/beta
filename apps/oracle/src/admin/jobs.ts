@@ -75,6 +75,9 @@ const killProcessTree = (child: ChildProcess) => {
 const MAX_OUTPUT_CHARS = 8000;
 const RETRYABLE_JOBS = new Set(["run-week", "refresh-week-coins", "transition-lock", "transition-start", "finalize", "finalize-audit"]);
 const TRANSIENT_HINTS = [
+  "funding_pending",
+  "underfunded",
+  "insufficient funds",
   "timeout",
   "timed out",
   "econnreset",
@@ -100,7 +103,6 @@ const TRANSIENT_HINTS = [
 ];
 
 const NON_RETRYABLE_SYSTEM_HINTS = [
-  "insufficient funds",
   "already known",
   "already imported",
   "invalid sender",
@@ -111,6 +113,10 @@ const NON_RETRYABLE_SYSTEM_HINTS = [
 ];
 
 const NON_RETRYABLE_HINTS = [
+  "deterministic",
+  "runweekblocked",
+  "unresolvedcurrentweekstatus",
+  "refreshweekcoinsrequiresdraft_opencurrentweek",
   "weekalreadyexists",
   "invalidtimerange",
   "draftnotopen",
@@ -135,6 +141,10 @@ const NON_RETRYABLE_HINTS = [
   "emergencyrefundnotallowed",
   "emergencyrefundnotactive",
   "refundamountmismatch",
+  "requiresdraftopenweekgot",
+  "requireslockedweekgot",
+  "requiresactiveweekgot",
+  "requiresfinalizependingweekgot",
 ];
 const draftOpenHoursRaw = Number(env.DRAFT_OPEN_HOURS ?? "23");
 const DRAFT_OPEN_HOURS = Number.isFinite(draftOpenHoursRaw) && draftOpenHoursRaw > 0 ? draftOpenHoursRaw : 23;
@@ -153,9 +163,29 @@ const RUN_WEEK_JOB_TIMEOUT_MS = normalizeTimeoutMs(
   Number(env.JOB_RUN_WEEK_TIMEOUT_MS),
   DEFAULT_JOB_TIMEOUT_MS,
 );
+const JOB_DB_WRITE_TIMEOUT_MS = normalizeTimeoutMs(Number(env.JOB_DB_WRITE_TIMEOUT_MS), 5000);
 
 const getJobTimeoutMs = (name: string) =>
   name === "run-week" ? RUN_WEEK_JOB_TIMEOUT_MS : DEFAULT_JOB_TIMEOUT_MS;
+
+const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> => {
+  if (timeoutMs <= 0) return await promise;
+  return await new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    promise
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
+};
 
 const jobStatus = new Map<string, JobStatus>();
 const jobControls = new Map<string, JobControl>();
@@ -252,18 +282,22 @@ export const stopJob = async (name?: string) => {
       // Persist explicit stop signal so incident dashboard does not remain "still failing".
       if (status.runId) {
         try {
-          await insertJobRun({
-            run_id: status.runId,
-            job_name: jobName,
-            week_id: status.weekId ?? null,
-            attempt: status.attempt > 0 ? status.attempt : 1,
-            status: "error",
-            error_message: "Stopped by operator",
-            error_code: "stopped",
-            output: status.output,
-            started_at: status.startedAt ?? finishedAt,
-            finished_at: finishedAt,
-          });
+          await withTimeout(
+            insertJobRun({
+              run_id: status.runId,
+              job_name: jobName,
+              week_id: status.weekId ?? null,
+              attempt: status.attempt > 0 ? status.attempt : 1,
+              status: "error",
+              error_message: "Stopped by operator",
+              error_code: "stopped",
+              output: status.output,
+              started_at: status.startedAt ?? finishedAt,
+              finished_at: finishedAt,
+            }),
+            JOB_DB_WRITE_TIMEOUT_MS,
+            "stopJobInsert",
+          );
         } catch (error) {
           appendOutput(status, `Stop log insert failed: ${error instanceof Error ? error.message : "unknown"}\n`);
         }
@@ -365,6 +399,7 @@ export const startJob = async (
   name: string,
   command: string,
   args: string[],
+  envOverrides?: Record<string, string>,
 ): Promise<JobStatus> => {
   const spawnTarget = normalizeJobSpawnCommand(command, args);
   const commandText = [spawnTarget.command, ...spawnTarget.args].join(" ");
@@ -424,14 +459,18 @@ export const startJob = async (
 
     let runRowId: number | null = null;
     try {
-      runRowId = await insertJobRun({
-        run_id: runId,
-        job_name: name,
-        week_id: weekId,
-        attempt,
-        status: "running",
-        started_at: attemptStartedAt,
-      });
+      runRowId = await withTimeout(
+        insertJobRun({
+          run_id: runId,
+          job_name: name,
+          week_id: weekId,
+          attempt,
+          status: "running",
+          started_at: attemptStartedAt,
+        }),
+        JOB_DB_WRITE_TIMEOUT_MS,
+        "insertJobRun",
+      );
     } catch (error) {
       appendOutput(status, `Job log insert failed: ${error instanceof Error ? error.message : "unknown"}
 `);
@@ -441,6 +480,7 @@ export const startJob = async (
       env: {
         ...process.env,
         ...(name === "run-week" ? { RUN_WEEK_BASE_TIME_MS: String(baseNowMs) } : {}),
+        ...(envOverrides ?? {}),
       },
       shell: process.platform === "win32",
     });
@@ -475,13 +515,17 @@ export const startJob = async (
 
       if (runRowId !== null) {
         try {
-          await updateJobRun(runRowId, {
-            status: exitCode === 0 && !wasCanceled ? "success" : "error",
-            error_message: errorText ?? null,
-            error_code: errorCode,
-            output: status.output,
-            finished_at: finishedAt,
-          });
+          await withTimeout(
+            updateJobRun(runRowId, {
+              status: exitCode === 0 && !wasCanceled ? "success" : "error",
+              error_message: errorText ?? null,
+              error_code: errorCode,
+              output: status.output,
+              finished_at: finishedAt,
+            }),
+            JOB_DB_WRITE_TIMEOUT_MS,
+            "updateJobRun",
+          );
         } catch (error) {
           appendOutput(status, `Job log update failed: ${error instanceof Error ? error.message : "unknown"}
 `);

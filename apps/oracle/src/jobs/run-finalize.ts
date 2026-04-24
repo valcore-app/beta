@@ -4,6 +4,7 @@ import {
   finalizeActivePositionsAtWeekEnd,
   getLineupPositions,
   getWeeklyCoinPrices,
+  snapshotWeekStartPrices,
   snapshotWeekEndPrices,
 } from "../services/weekPricing.service.js";
 import {
@@ -27,7 +28,7 @@ import {
   getRuntimeValcoreAddress,
   isValcoreChainEnabled,
 } from "../network/chain-runtime.js";
-import { getOnchainFeeBps, getOnchainTestMode, sendFinalizeOnchain } from "../network/valcore-chain-client.js";
+import { getOnchainFeeBps, getOnchainTestMode, getOnchainWeekState, sendFinalizeOnchain } from "../network/valcore-chain-client.js";
 import {
   ensureLifecycleIntent,
   markLifecycleIntentCompleted,
@@ -36,7 +37,7 @@ import {
 } from "./lifecycle-intent.js";
 import { assertWeekChainSync } from "./week-sync-guard.js";
 
-const automationMode = normalizeAutomationMode(env.AUTOMATION_MODE);
+const automationMode = normalizeAutomationMode(process.env.AUTOMATION_MODE_EFFECTIVE ?? env.AUTOMATION_MODE);
 const derivedTimeMode = getDerivedTimeMode(automationMode);
 const isManual = isManualAutomationMode(automationMode);
 
@@ -109,6 +110,22 @@ const normalizeHashForChain = (value: string, chainType: string) => {
   return ethers.toBeHex(BigInt(normalized) % starknetFieldPrime, 32).toLowerCase();
 };
 
+const extractReactiveTxHash = (error: unknown): string | null => {
+  const direct =
+    typeof error === "object" && error !== null
+      ? String((error as { reactiveTxHash?: unknown }).reactiveTxHash ?? "").trim().toLowerCase()
+      : "";
+  if (/^0x[0-9a-f]{64}$/u.test(direct)) return direct;
+  return null;
+};
+
+const getIntentUpdatedAtMs = (intent: { updated_at?: unknown }) => {
+  const raw = String(intent.updated_at ?? "").trim();
+  if (!raw) return 0;
+  const ms = Date.parse(raw);
+  return Number.isFinite(ms) ? ms : 0;
+};
+
 const run = async () => {
   const weeks = await getWeeks();
   const week = weeks[0];
@@ -136,12 +153,27 @@ const run = async () => {
 
   let weeklyPrices = await getWeeklyCoinPrices(week.id);
   if (!weeklyPrices.length) {
-    throw new Error("Missing weekly coin prices");
+    const lockAtTs = Math.floor(new Date(week.lock_at).getTime() / 1000);
+    if (Number.isFinite(lockAtTs) && lockAtTs > 0) {
+      await snapshotWeekStartPrices(week.id, { timestamp: lockAtTs });
+      weeklyPrices = await getWeeklyCoinPrices(week.id);
+    }
+    if (!weeklyPrices.length) {
+      throw new Error("Missing weekly coin prices");
+    }
   }
 
   const hasStartPrices = weeklyPrices.some((row) => row.start_price !== null);
   if (!hasStartPrices) {
-    throw new Error("Missing week start prices");
+    const lockAtTs = Math.floor(new Date(week.lock_at).getTime() / 1000);
+    if (Number.isFinite(lockAtTs) && lockAtTs > 0) {
+      await snapshotWeekStartPrices(week.id, { timestamp: lockAtTs });
+      weeklyPrices = await getWeeklyCoinPrices(week.id);
+    }
+    const hasRecoveredStartPrices = weeklyPrices.some((row) => row.start_price !== null);
+    if (!hasRecoveredStartPrices) {
+      throw new Error("Missing week start prices");
+    }
   }
 
   const hasEndPrices = weeklyPrices.some((row) => row.end_price !== null);
@@ -168,8 +200,11 @@ const run = async () => {
   }
 
   const lineups = await getLineups(week.id);
-  if (!lineups.length) {
+  if (!lineups.length && isManual) {
     throw new Error("No lineups found for finalize");
+  }
+  if (!lineups.length) {
+    console.warn("finalize: no lineups found; continuing with empty settlement (automation mode)");
   }
 
   const coins = await getCoins();
@@ -330,6 +365,7 @@ const run = async () => {
     ? await getRuntimeChainIdBigInt()
     : await getConfiguredRuntimeChainIdBigInt();
   const chainType = (await getRuntimeChainConfig()).chainType;
+  const isReactiveEvm = automationMode === "REACTIVE" && chainType === "evm";
   const weekId = BigInt(week.id);
   const leaves = claims.map((entry) =>
     buildFinalizeLeaf(
@@ -344,13 +380,13 @@ const run = async () => {
     ),
   );
 
-  const tree = new MerkleTree(leaves, keccak256, { sortPairs: true });
-  const root = tree.getHexRoot();
+  const tree = leaves.length ? new MerkleTree(leaves, keccak256, { sortPairs: true }) : null;
+  const root = tree ? tree.getHexRoot() : ethers.keccak256(ethers.toUtf8Bytes(`VALCORE_EMPTY_ROOT:${week.id}`));
   const rootForChain = normalizeHashForChain(root, chainType);
 
   const claimsWithProof = claims.map((entry, idx) => {
     const leaf = leaves[idx];
-    const proof = tree.getHexProof(leaf);
+    const proof = tree ? tree.getHexProof(leaf) : [];
     return { ...entry, proof };
   });
 
@@ -428,6 +464,32 @@ const run = async () => {
   }
 
   let txHash: string | null = intent.tx_hash ? String(intent.tx_hash).toLowerCase() : null;
+  let reactiveTxHash: string | null = isReactiveEvm ? txHash : null;
+
+  // If a previous finalize intent is stale while on-chain is still ACTIVE (3),
+  // clear stale hash and allow this run to submit a fresh reactive finalize dispatch.
+  if (txHash && chainEnabled && leagueAddress) {
+    const intentState = String(intent.status ?? "").toLowerCase();
+    const onchainNow = await getOnchainWeekState(leagueAddress, weekId);
+    const onchainNowStatus = Number(onchainNow.status ?? 0);
+    if (onchainNowStatus === 3) {
+      const pendingSinceMs = getIntentUpdatedAtMs(intent as { updated_at?: unknown });
+      const reactiveStallGraceMs = Math.max(
+        15_000,
+        Number(env.REACTIVE_STALL_GRACE_SECONDS ?? "120") * 1000,
+      );
+      const staleSubmitted = pendingSinceMs > 0 && Date.now() - pendingSinceMs > reactiveStallGraceMs;
+      if (intentState === "failed" || intentState === "error" || staleSubmitted) {
+        if (staleSubmitted) {
+          console.warn(
+            `[run-finalize] stale reactive finalize callback detected for week ${week.id}; resubmitting with fresh intent tx`,
+          );
+        }
+        txHash = null;
+        reactiveTxHash = null;
+      }
+    }
+  }
 
   try {
     if (!txHash && leagueAddress) {
@@ -441,23 +503,76 @@ const run = async () => {
         );
       }
 
-      txHash = await sendFinalizeOnchain(
-        leagueAddress,
-        weekId,
-        rootForChain,
-        metadataHashForChain,
-        feeWei,
-        useForce,
-      );
+      try {
+        txHash = await sendFinalizeOnchain(
+          leagueAddress,
+          weekId,
+          rootForChain,
+          metadataHashForChain,
+          feeWei,
+          useForce,
+          opKey,
+        );
 
-      intent =
-        (await markLifecycleIntentSubmitted(intent, txHash, {
-          txHash,
-          root: rootForChain,
-          metadataHash: metadataHashForChain,
-          feeWei: feeWei.toString(),
-          chainExecuted: true,
-        })) ?? intent;
+        if (isReactiveEvm) reactiveTxHash = txHash;
+
+        intent =
+          (await markLifecycleIntentSubmitted(intent, txHash, {
+            txHash,
+            root: rootForChain,
+            metadataHash: metadataHashForChain,
+            feeWei: feeWei.toString(),
+            chainExecuted: true,
+            reactiveTxHash,
+          })) ?? intent;
+      } catch (error) {
+        const dispatchedReactiveTx = extractReactiveTxHash(error);
+        if (isReactiveEvm && dispatchedReactiveTx) {
+          txHash = dispatchedReactiveTx;
+          reactiveTxHash = dispatchedReactiveTx;
+          intent =
+            (await markLifecycleIntentSubmitted(intent, dispatchedReactiveTx, {
+              txHash: dispatchedReactiveTx,
+              root: rootForChain,
+              metadataHash: metadataHashForChain,
+              feeWei: feeWei.toString(),
+              chainExecuted: true,
+              reactiveTxHash,
+              pendingConfirmation: true,
+            })) ?? intent;
+          console.log(
+            `[run-finalize] reactive finalize submitted tx=${dispatchedReactiveTx}; waiting callback confirmation`,
+          );
+          return;
+        }
+        throw error;
+      }
+    }
+
+    if (chainEnabled && leagueAddress) {
+      const onchainAfter = await getOnchainWeekState(leagueAddress, weekId);
+      const onchainAfterStatus = Number(onchainAfter.status ?? 0);
+      if (onchainAfterStatus !== 4) {
+        if (isReactiveEvm && txHash) {
+          const pendingSinceMs = getIntentUpdatedAtMs(intent as { updated_at?: unknown });
+          const reactiveStallGraceMs = Math.max(
+            15_000,
+            Number(env.REACTIVE_STALL_GRACE_SECONDS ?? "120") * 1000,
+          );
+          if (pendingSinceMs > 0 && Date.now() - pendingSinceMs > reactiveStallGraceMs) {
+            throw new Error(
+              `DETERMINISTIC: finalize reactive callback timeout for week ${week.id}; tx=${txHash}; on-chain status=${onchainAfterStatus}`,
+            );
+          }
+          console.log(
+            `[run-finalize] reactive callback pending for week ${week.id}; current on-chain status=${onchainAfterStatus}`,
+          );
+          return;
+        }
+        throw new Error(
+          `run-finalize: on-chain status is ${onchainAfterStatus}, expected 4 (FINALIZE_PENDING) before DB update`,
+        );
+      }
     }
     await updateWeekStatus(week.id, "FINALIZE_PENDING");
 
@@ -468,6 +583,7 @@ const run = async () => {
       feeWei: feeWei.toString(),
       status: "FINALIZE_PENDING",
       chainExecuted: Boolean(txHash),
+      reactiveTxHash,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -478,6 +594,7 @@ const run = async () => {
       feeWei: feeWei.toString(),
       status: "FINALIZE_PENDING",
       chainExecuted: Boolean(txHash),
+      reactiveTxHash,
     });
     throw error;
   }
@@ -487,3 +604,12 @@ run().catch((error) => {
   console.error("finalize job failed", error);
   process.exit(1);
 });
+
+
+
+
+
+
+
+
+

@@ -59,7 +59,9 @@ export const markLifecycleIntentSubmitted = async (
 ): Promise<LifecycleIntentRow | null> => {
   const detailsJson = mergeDetailsJson(intent.details_json, patch);
   const row = await markLifecycleTxIntentSubmitted(intent.id, txHash, detailsJson);
-  return (row as LifecycleIntentRow | null) ?? null;
+  if (row) return row as LifecycleIntentRow;
+  const latest = (await getLifecycleTxIntentByOpKey(intent.op_key)) as LifecycleIntentRow | null;
+  return latest;
 };
 
 export const markLifecycleIntentCompleted = async (

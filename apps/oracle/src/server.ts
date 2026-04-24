@@ -1,4 +1,4 @@
-﻿import Fastify, { FastifyRequest, FastifyReply } from "fastify";
+import Fastify, { FastifyRequest, FastifyReply } from "fastify";
 import cors from "@fastify/cors";
 import { z } from "zod";
 import { env } from "./env.js";
@@ -21,7 +21,6 @@ import {
     upsertFaucetClaim,
     getPlayerProfile,
     getPlayerProfileByDisplayName,
-    getPlayerProfilesByAddresses,
     upsertPlayerProfile,
     listJobRunIncidents,
     getMockLineups,
@@ -53,6 +52,7 @@ import {
     getEpochStrategies,
     getStrategyLeaderboardRows,
     getStrategySeasonEntries,
+    listLifecycleReactiveEvents,
 } from "./store.js";
 import { getLineupPositions, getWeeklyCoinPrices } from "./services/weekPricing.service.js";
 import { calculateLineupWeekScore, computeBenchmarkPnlPercent, getWeekScoreModelCatalog, WEEK_SCORE_MODEL_ORDER } from "./services/weekScore.service.js";
@@ -64,6 +64,7 @@ import { hasRunningJob, listJobStatuses, startJob, stopJob, jobsEvents } from ".
 import { cancelSelfHealTaskById, enqueueLineupSyncTask, getSelfHealDashboard, retrySelfHealTaskById, runSelfHealSweep, startSelfHealWorker, } from "./admin/self-heal.js";
 import { getErrorAlertPublicConfig, maybeTriggerErrorAlert } from "./admin/error-alerts.js";
 import { getAutomationSupportReason, getDerivedTimeMode, isReactiveSupported, normalizeAutomationMode } from "./admin/automation.js";
+import { reconcileWeekStatusDrift } from "./jobs/week-drift.js";
 import { ethers } from "ethers";
 import { getDbRuntimeBinding } from "./db/db.js";
 import {
@@ -277,6 +278,9 @@ const isReadLimitedPath = (path: string) => {
         return true;
     }
     if (/^\/weeks\/[^/]+\/coins$/.test(path)) {
+        return true;
+    }
+    if (/^\/weeks\/[^/]+\/reactive-flow$/.test(path)) {
         return true;
     }
     if (/^\/weeks\/[^/]+\/showcase-lineup$/.test(path)) {
@@ -499,8 +503,9 @@ const COOLDOWN_MS = COOLDOWN_HOURS * 60 * 60 * 1000;
 const AUTOMATION_TICK_MS = toPositiveInt(env.AUTOMATION_TICK_MS, 15000);
 const AUTOMATION_REACTIVE_AUTO_AUDIT = parseBoolean(env.AUTOMATION_REACTIVE_AUTO_AUDIT);
 const AUTOMATION_UNSUPPORTED_ALERT_COOLDOWN_MS = 5 * 60 * 1000;
+const REACTIVE_STALL_GRACE_MS = Math.max(30 * 1000, toPositiveInt(env.REACTIVE_STALL_GRACE_SECONDS, 120) * 1000);
 const REWARD_SWEEP_DELAY_MS = 180 * 24 * 60 * 60 * 1000;
-const PUBLIC_WEEK_STATUSES = new Set(["DRAFT_OPEN", "LOCKED", "ACTIVE", "FINALIZE_PENDING", "FINALIZED"]);
+const PUBLIC_WEEK_STATUSES = new Set(["PREPARING", "DRAFT_OPEN", "LOCKED", "ACTIVE", "FINALIZE_PENDING", "FINALIZED"]);
 const filterPublicWeeks = (rows: unknown[]) => rows.filter((row) => PUBLIC_WEEK_STATUSES.has(String((row as Record<string, unknown>).status ?? "").toUpperCase()));
 const getCurrentPublicWeek = (rows: unknown[]) => filterPublicWeeks(rows)[0] ?? null;
 const buildCooldownEndIso = (finalizedAt: string | null | undefined) => {
@@ -540,9 +545,49 @@ const buildWeekSnapshot = async () => {
     return buildPublicWeekPayload(parsed);
 };
 const snapshotSignature = (snapshot: { id?: string | null; status?: string | null; startAtUtc?: string | null; lockAtUtc?: string | null; endAtUtc?: string | null; finalizedAtUtc?: string | null; cooldownEndsAtUtc?: string | null }) => `${snapshot.id ?? "none"}|${snapshot.status ?? "none"}|${snapshot.startAtUtc ?? ""}|${snapshot.lockAtUtc ?? ""}|${snapshot.endAtUtc ?? ""}|${snapshot.finalizedAtUtc ?? ""}|${snapshot.cooldownEndsAtUtc ?? ""}`;
+const automationHaltState: {
+    halted: boolean;
+    reason: string | null;
+    activatedAt: string | null;
+    contextJson: string | null;
+} = {
+    halted: false,
+    reason: null,
+    activatedAt: null,
+    contextJson: null,
+};
+const getEffectiveAutomationMode = (baseMode: string) => normalizeAutomationMode(baseMode);
+const haltAutomation = async (reason: string, context?: Record<string, unknown>) => {
+    const baseMode = normalizeAutomationMode(env.AUTOMATION_MODE);
+    const payload = {
+        baseMode,
+        reason,
+        context: context ?? null,
+    };
+    if (!automationHaltState.halted) {
+        automationHaltState.halted = true;
+        automationHaltState.reason = reason;
+        automationHaltState.activatedAt = new Date().toISOString();
+        automationHaltState.contextJson = context ? safeJsonStringify(context, 4000) : null;
+    }
+    server.log.error(payload, "automation halted (strict reactive mode)");
+    await insertErrorEvent({
+        event_id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        source: "oracle-automation",
+        severity: "error",
+        category: "automation",
+        message: `Automation halted. ${reason}`,
+        path: "/automation/halt",
+        method: "SYSTEM",
+        status_code: 422,
+        context_json: safeJsonStringify(payload),
+        created_at: new Date().toISOString(),
+    }).catch(() => { });
+};
 const resolveAutomationRuntime = async () => {
     const runtime = await getRuntimeChainConfig().catch(() => null);
-    const mode = normalizeAutomationMode(env.AUTOMATION_MODE);
+    const baseMode = normalizeAutomationMode(env.AUTOMATION_MODE);
+    const mode = getEffectiveAutomationMode(baseMode);
     const timeMode = getDerivedTimeMode(mode);
     const fallbackChainIdRaw = runtime?.chainId ?? env.CHAIN_ID ?? process.env.CHAIN_ID ?? null;
     const fallbackChainId = Number(fallbackChainIdRaw);
@@ -552,7 +597,21 @@ const resolveAutomationRuntime = async () => {
     const chainKey = String(runtime?.networkKey ?? env.CHAIN_KEY ?? "").trim().toLowerCase();
     const reactiveSupported = isReactiveSupported({ chainType, chainId, chainKey });
     const supportReason = getAutomationSupportReason({ chainType, chainId, chainKey });
-    return { mode, timeMode, chainType, chainId, chainKey, reactiveSupported, supportReason };
+    return {
+        baseMode,
+        mode,
+        timeMode,
+        chainType,
+        chainId,
+        chainKey,
+        reactiveSupported,
+        supportReason,
+        failoverActive: automationHaltState.halted,
+        failoverMode: automationHaltState.halted ? "HALT" : null,
+        failoverReason: automationHaltState.reason,
+        failoverActivatedAt: automationHaltState.activatedAt,
+        failoverContextJson: automationHaltState.contextJson,
+    };
 };
 const areClaimsUnlockedForWeek = async (weekId: string) => {
     const weeks = await getWeeks();
@@ -1487,6 +1546,237 @@ server.get("/weeks/current", async () => {
         return null;
     const parsed = WeekRowSchema.parse(row);
     return buildPublicWeekPayload(parsed);
+});
+server.get("/weeks/:weekId/reactive-flow", async (request) => {
+    const params = z.object({ weekId: z.string() }).parse(request.params);
+    const query = z
+        .object({ limit: z.coerce.number().int().min(1).max(50).optional() })
+        .parse(request.query ?? {});
+    const requestedLimit = query.limit ?? 50;
+    const weekRows = await listLifecycleReactiveEvents({
+        weekId: params.weekId,
+        limit: requestedLimit,
+    });
+    let rows = weekRows;
+    if (weekRows.length < requestedLimit) {
+        const globalRows = await listLifecycleReactiveEvents({
+            weekId: null,
+            limit: requestedLimit,
+        });
+        const deduped = new Map<string, any>();
+        for (const row of [...weekRows, ...globalRows]) {
+            deduped.set(String(row?.id ?? ""), row);
+            if (deduped.size >= requestedLimit)
+                break;
+        }
+        rows = Array.from(deduped.values());
+    }
+    const reactiveExplorerBase = "https://lasna.reactscan.net";
+    const chainExplorerBase = String(env.CHAIN_EXPLORER_URL ?? "").trim().replace(/\/+$/u, "");
+    const destinationReceiverAddress = normalizeMaybeAddress(env.REACTIVE_RECEIVER_ADDRESS);
+    const destinationProvider = destinationReceiverAddress ? await getRuntimeProvider() : null;
+    const destinationTopic0 = ethers.id("ReactiveLifecycleExecuted(bytes32,uint8,uint256)");
+    const destinationLookupCache = new Map<string, Promise<string | null>>();
+    const normalizeHash = (value: unknown) => {
+        const hash = String(value ?? "").trim().toLowerCase();
+        return /^0x[0-9a-f]{64}$/u.test(hash) ? hash : null;
+    };
+    const resolveDestinationTxHashByOpKey = async (opKeyRaw: unknown) => {
+        const opKey = String(opKeyRaw ?? "").trim();
+        if (!opKey || !destinationProvider || !destinationReceiverAddress)
+            return null;
+        if (destinationLookupCache.has(opKey)) {
+            return destinationLookupCache.get(opKey) as Promise<string | null>;
+        }
+        const task = (async () => {
+            try {
+                const latest = await destinationProvider.getBlockNumber();
+                const fromBlock = Math.max(0, latest - 2_000_000);
+                const intentIds = [ethers.id(opKey).toLowerCase(), ethers.id(`valcore:lifecycle:${opKey}`).toLowerCase()];
+                for (const intentId of intentIds) {
+                    const logs = await destinationProvider.getLogs({
+                        address: destinationReceiverAddress,
+                        fromBlock,
+                        toBlock: latest,
+                        topics: [destinationTopic0, intentId],
+                    });
+                    const hit = normalizeHash(logs[logs.length - 1]?.transactionHash);
+                    if (hit)
+                        return hit;
+                }
+                return null;
+            }
+            catch {
+                return null;
+            }
+        })();
+        destinationLookupCache.set(opKey, task);
+        return task;
+    };
+    const events = await Promise.all(rows.map(async (row: any) => {
+        const reactiveTxHash =
+            typeof row?.reactive_tx_hash === "string" && row.reactive_tx_hash.trim()
+                ? row.reactive_tx_hash.trim().toLowerCase()
+                : null;
+        let sepoliaTxHash =
+            typeof row?.destination_tx_hash === "string" && row.destination_tx_hash.trim()
+                ? row.destination_tx_hash.trim().toLowerCase()
+                : null;
+        if (!sepoliaTxHash) {
+            sepoliaTxHash = await resolveDestinationTxHashByOpKey(row?.op_key);
+        }
+        const normalizedReactive = normalizeHash(reactiveTxHash);
+        const normalizedSepolia = normalizeHash(sepoliaTxHash);
+        return {
+            id: String(row?.id ?? ""),
+            opKey: String(row?.op_key ?? ""),
+            weekId: String(row?.week_id ?? params.weekId),
+            operation: String(row?.operation ?? ""),
+            status: String(row?.status ?? ""),
+            reactiveTxHash: normalizedReactive,
+            reactiveTxUrl: normalizedReactive ? reactiveExplorerBase + "/tx/" + normalizedReactive : null,
+            sepoliaTxHash: normalizedSepolia,
+            sepoliaTxUrl: normalizedSepolia && chainExplorerBase ? chainExplorerBase + "/tx/" + normalizedSepolia : null,
+            createdAt: String(row?.created_at ?? ""),
+            updatedAt: String(row?.updated_at ?? ""),
+        };
+    }));
+    return {
+        weekId: params.weekId,
+        events,
+    };
+});
+const classifyReactiveTargetContract = (input: {
+    toAddress: string | null;
+    dispatcherAddress: string | null;
+    callbackSenderAddress: string | null;
+}) => {
+    const toAddress = String(input.toAddress ?? "").toLowerCase();
+    const dispatcher = String(input.dispatcherAddress ?? "").toLowerCase();
+    const callbackSender = String(input.callbackSenderAddress ?? "").toLowerCase();
+    if (toAddress && dispatcher && toAddress === dispatcher) {
+        return "ValcoreReactiveDispatcher";
+    }
+    if (toAddress && callbackSender && toAddress === callbackSender) {
+        return "ReactiveCallbackSender";
+    }
+    return toAddress ? "UnknownReactiveContract" : null;
+};
+server.get("/admin/reactive-txs", async (request) => {
+    const query = z
+        .object({
+        weekId: z.string().trim().min(1).optional(),
+        limit: z.coerce.number().int().min(1).max(100).optional(),
+    })
+        .parse(request.query ?? {});
+    const events = await listLifecycleReactiveEvents({
+        weekId: query.weekId ?? null,
+        limit: query.limit ?? 60,
+    });
+    const explorerBase = "https://lasna.reactscan.net";
+    const rpcUrl = String(env.REACTIVE_CHAIN_RPC_URL ?? "").trim();
+    const chainIdRaw = Number(env.REACTIVE_CHAIN_ID);
+    const chainId = Number.isFinite(chainIdRaw) && chainIdRaw > 0 ? Math.floor(chainIdRaw) : null;
+    const dispatcherAddress = normalizeMaybeAddress(env.REACTIVE_DISPATCHER_ADDRESS);
+    const callbackSenderAddress = normalizeMaybeAddress(env.REACTIVE_CALLBACK_SENDER_ADDRESS);
+    const provider = rpcUrl ? new ethers.JsonRpcProvider(rpcUrl, chainId ?? 5318007) : null;
+    const hydrated = await Promise.all(events.map(async (row: any) => {
+        const reactiveTxHash = typeof row?.reactive_tx_hash === "string" && row.reactive_tx_hash.trim()
+            ? row.reactive_tx_hash.trim().toLowerCase()
+            : null;
+        let reactiveTx: {
+            found: boolean;
+            from: string | null;
+            to: string | null;
+            blockNumber: number | null;
+            status: number | null;
+            methodSelector: string | null;
+            targetContractAddress: string | null;
+            targetContractLabel: string | null;
+            logAddress: string | null;
+            error: string | null;
+        } | null = null;
+        if (reactiveTxHash) {
+            if (!provider) {
+                reactiveTx = {
+                    found: false,
+                    from: null,
+                    to: null,
+                    blockNumber: null,
+                    status: null,
+                    methodSelector: null,
+                    targetContractAddress: null,
+                    targetContractLabel: null,
+                    logAddress: null,
+                    error: "Reactive RPC is not configured",
+                };
+            }
+            else {
+                try {
+                    const [tx, receipt] = await Promise.all([
+                        provider.getTransaction(reactiveTxHash),
+                        provider.getTransactionReceipt(reactiveTxHash),
+                    ]);
+                    const toAddress = tx?.to ? normalizeMaybeAddress(tx.to) : null;
+                    const firstLogAddress = receipt?.logs?.[0]?.address
+                        ? normalizeMaybeAddress(receipt.logs[0].address)
+                        : null;
+                    reactiveTx = {
+                        found: Boolean(tx),
+                        from: tx?.from ? normalizeMaybeAddress(tx.from) : null,
+                        to: toAddress,
+                        blockNumber: tx?.blockNumber ?? null,
+                        status: typeof receipt?.status === "number" ? receipt.status : null,
+                        methodSelector: tx?.data ? String(tx.data).slice(0, 10).toLowerCase() : null,
+                        targetContractAddress: toAddress,
+                        targetContractLabel: classifyReactiveTargetContract({
+                            toAddress,
+                            dispatcherAddress,
+                            callbackSenderAddress,
+                        }),
+                        logAddress: firstLogAddress,
+                        error: tx ? null : "Reactive transaction not found",
+                    };
+                }
+                catch (error) {
+                    reactiveTx = {
+                        found: false,
+                        from: null,
+                        to: null,
+                        blockNumber: null,
+                        status: null,
+                        methodSelector: null,
+                        targetContractAddress: null,
+                        targetContractLabel: null,
+                        logAddress: null,
+                        error: error instanceof Error ? error.message : "Reactive transaction lookup failed",
+                    };
+                }
+            }
+        }
+        return {
+            id: String(row?.id ?? ""),
+            opKey: String(row?.op_key ?? ""),
+            weekId: String(row?.week_id ?? ""),
+            operation: String(row?.operation ?? ""),
+            status: String(row?.status ?? ""),
+            reactiveTxHash,
+            reactiveTxUrl: reactiveTxHash ? `${explorerBase}/tx/${reactiveTxHash}` : null,
+            createdAt: String(row?.created_at ?? ""),
+            updatedAt: String(row?.updated_at ?? ""),
+            reactiveTx,
+        };
+    }));
+    return {
+        network: {
+            chainId,
+            rpcConfigured: Boolean(rpcUrl),
+            explorerBase,
+            dispatcherAddress,
+            callbackSenderAddress,
+        },
+        events: hydrated,
+    };
 });
 server.get("/weeks/:weekId/coins", async (request) => {
     const params = z.object({ weekId: z.string() }).parse(request.params);
@@ -2655,9 +2945,14 @@ server.get("/admin/status", async () => {
         serverTime: new Date().toISOString(),
         timeMode: automation.timeMode,
         automationMode: automation.mode,
+        automationConfiguredMode: automation.baseMode,
         automationTickMs: AUTOMATION_TICK_MS,
         automationReactiveSupported: automation.reactiveSupported,
         automationSupportReason: automation.supportReason,
+        automationFailoverActive: automation.failoverActive,
+        automationFailoverMode: automation.failoverMode,
+        automationFailoverReason: automation.failoverReason,
+        automationFailoverActivatedAt: automation.failoverActivatedAt,
         chainEnabled: Boolean(isValcoreChainEnabled() && runtime?.oraclePrivateKey && leagueAddress),
         leagueContractSet: Boolean(leagueAddress),
         stablecoinAddressSet: Boolean(runtime?.stablecoinAddress),
@@ -2681,15 +2976,28 @@ server.post("/admin/automation/tick", async (request, reply) => {
     if (!isAdminAuthorized(request)) {
         return reply.code(401).send({ error: "Unauthorized" });
     }
-    const automation = await resolveAutomationRuntime();
     await runAutomationTick();
+    const automation = await resolveAutomationRuntime();
     return {
         ok: true,
         automationMode: automation.mode,
+        configuredMode: automation.baseMode,
         timeMode: automation.timeMode,
         reactiveSupported: automation.reactiveSupported,
         supportReason: automation.supportReason,
+        failoverActive: automation.failoverActive,
+        failoverMode: automation.failoverMode,
+        failoverReason: automation.failoverReason,
+        failoverActivatedAt: automation.failoverActivatedAt,
     };
+});
+server.post("/admin/automation/failover/reset", async (request, reply) => {
+    if (!isAdminAuthorized(request)) {
+        return reply.code(401).send({ error: "Unauthorized" });
+    }
+    return reply.code(409).send({
+        error: "Automation halt reset is disabled in strict mode. Change env + redeploy to recover.",
+    });
 });
 server.get("/admin/finance/week", async (request, reply) => {
     const query = z.object({ weekId: z.string().optional() }).parse(request.query ?? {});
@@ -2938,7 +3246,7 @@ server.post("/admin/jobs/run-week", async (_request, reply) => {
             error: `Cannot run new week while current week is ${currentStatus || "UNKNOWN"}`,
         });
     }
-    const status = await startJob("run-week", "npm", ["run", "job:week"]);
+    const status = await startJob("run-week", "node", ["dist/jobs/job-week.js"]);
     return { ok: true, status };
 });
 server.post("/admin/jobs/refresh-week-coins", async (_request, reply) => {
@@ -2951,7 +3259,7 @@ server.post("/admin/jobs/refresh-week-coins", async (_request, reply) => {
     if (currentStatus !== "DRAFT_OPEN") {
         return reply.code(409).send({ error: `Refresh week coins requires DRAFT_OPEN week; got ${currentStatus || "UNKNOWN"}` });
     }
-    const status = await startJob("refresh-week-coins", "npm", ["run", "job:refresh-week-coins"]);
+    const status = await startJob("refresh-week-coins", "node", ["dist/jobs/run-refresh-week-coins.js"]);
     return { ok: true, status };
 });
 server.post("/admin/jobs/transition", async (request, reply) => {
@@ -2959,7 +3267,7 @@ server.post("/admin/jobs/transition", async (request, reply) => {
         return reply.code(409).send({ error: "Another job is already running" });
     }
     const body = z.object({ action: z.enum(["lock", "start"]) }).parse(request.body);
-    const status = await startJob(`transition-${body.action}`, "npm", ["run", "job:transition", "--", body.action]);
+    const status = await startJob(`transition-${body.action}`, "node", ["dist/jobs/run-transition.js", body.action]);
     return { ok: true, status };
 });
 server.post("/admin/jobs/finalize", async (_request, reply) => {
@@ -2971,7 +3279,7 @@ server.post("/admin/jobs/finalize", async (_request, reply) => {
     if (currentStatus !== "ACTIVE") {
         return reply.code(409).send({ error: `Finalize requires ACTIVE week; got ${currentStatus || "UNKNOWN"}` });
     }
-    const status = await startJob("finalize", "npm", ["run", "job:finalize"]);
+    const status = await startJob("finalize", "node", ["dist/jobs/run-finalize.js"]);
     return { ok: true, status };
 });
 server.post("/admin/jobs/finalize-audit", async (_request, reply) => {
@@ -2983,7 +3291,7 @@ server.post("/admin/jobs/finalize-audit", async (_request, reply) => {
     if (currentStatus !== "FINALIZE_PENDING") {
         return reply.code(409).send({ error: `Audit requires FINALIZE_PENDING week; got ${currentStatus || "UNKNOWN"}` });
     }
-    const status = await startJob("finalize-audit", "npm", ["run", "job:finalize-audit"]);
+    const status = await startJob("finalize-audit", "node", ["dist/jobs/run-finalize-audit.js"]);
     return { ok: true, status };
 });
 server.post("/admin/jobs/finalize-reject", async (_request, reply) => {
@@ -2995,35 +3303,35 @@ server.post("/admin/jobs/finalize-reject", async (_request, reply) => {
     if (currentStatus !== "FINALIZE_PENDING") {
         return reply.code(409).send({ error: `Reject requires FINALIZE_PENDING week; got ${currentStatus || "UNKNOWN"}` });
     }
-    const status = await startJob("finalize-reject", "npm", ["run", "job:finalize-reject"]);
+    const status = await startJob("finalize-reject", "node", ["dist/jobs/run-finalize-reject.js"]);
     return { ok: true, status };
 });
 server.post("/admin/jobs/pause", async (_request, reply) => {
     if (hasRunningJob()) {
         return reply.code(409).send({ error: "Another job is already running" });
     }
-    const status = await startJob("pause", "npm", ["run", "job:pause"]);
+    const status = await startJob("pause", "node", ["dist/jobs/run-pause.js"]);
     return { ok: true, status };
 });
 server.post("/admin/jobs/unpause", async (_request, reply) => {
     if (hasRunningJob()) {
         return reply.code(409).send({ error: "Another job is already running" });
     }
-    const status = await startJob("unpause", "npm", ["run", "job:unpause"]);
+    const status = await startJob("unpause", "node", ["dist/jobs/run-unpause.js"]);
     return { ok: true, status };
 });
 server.post("/admin/jobs/time-mode", async (_request, reply) => {
     if (hasRunningJob()) {
         return reply.code(409).send({ error: "Another job is already running" });
     }
-    const status = await startJob("time-mode", "npm", ["run", "job:time-mode"]);
+    const status = await startJob("time-mode", "node", ["dist/jobs/run-time-mode.js"]);
     return { ok: true, status };
 });
 server.post("/admin/jobs/reset-db", async (_request, reply) => {
     if (hasRunningJob()) {
         return reply.code(409).send({ error: "Another job is already running" });
     }
-    const status = await startJob("reset-db", "npm", ["run", "job:reset-db"]);
+    const status = await startJob("reset-db", "node", ["dist/jobs/run-reset-db.js"]);
     return { ok: true, status };
 });
 const emitWeekSnapshot = async () => {
@@ -3041,6 +3349,67 @@ setInterval(() => {
         server.log.error({ error }, "emitWeekSnapshot failed");
     });
 }, 2000);
+const AUTOMATION_GUARDED_JOB_NAMES = new Set([
+    "run-week",
+    "transition-lock",
+    "transition-start",
+    "finalize",
+    "finalize-audit",
+]);
+const maybeRecoverAutomationFailureFromDrift = async (jobName: string, status: Record<string, unknown>) => {
+    const weekId = String((status as { weekId?: string | null }).weekId ?? "").trim();
+    const latestWeeks = await getWeeks();
+    const current = weekId ? (await getWeekById(weekId)) ?? latestWeeks[0] : latestWeeks[0];
+    if (!current) {
+        return false;
+    }
+    const dbStatus = String(current.status ?? "").toUpperCase();
+    if (!["DRAFT_OPEN", "LOCKED", "ACTIVE", "FINALIZE_PENDING", "FINALIZED"].includes(dbStatus)) {
+        return false;
+    }
+    const leagueAddress = await getRuntimeValcoreAddress().catch(() => null);
+    if (!leagueAddress) {
+        return false;
+    }
+    const drift = await reconcileWeekStatusDrift({
+        context: `automation-failure/${jobName}`,
+        weekId: String(current.id),
+        dbStatus,
+        leagueAddress,
+    });
+    return drift.reconciled;
+};
+const maybeEscalateAutomationFailure = async (event: { name?: string; status?: Record<string, unknown> } | null | undefined) => {
+    const jobName = String(event?.name ?? "");
+    if (!AUTOMATION_GUARDED_JOB_NAMES.has(jobName))
+        return;
+    const status = event?.status ?? {};
+    const state = String((status as { state?: string }).state ?? "").toLowerCase();
+    const nextRetryAt = String((status as { nextRetryAt?: string | null }).nextRetryAt ?? "").trim();
+    if (state !== "error" || nextRetryAt) {
+        return;
+    }
+    const recovered = await maybeRecoverAutomationFailureFromDrift(jobName, status as Record<string, unknown>).catch(() => false);
+    if (recovered) {
+        return;
+    }
+    const runtime = await resolveAutomationRuntime();
+    if (runtime.mode === "REACTIVE") {
+        await haltAutomation(`Reactive mode failure on ${jobName}`, {
+            jobName,
+            error: (status as { error?: string | null }).error ?? null,
+            lastError: (status as { lastError?: string | null }).lastError ?? null,
+        });
+        return;
+    }
+    if (runtime.mode === "CRON") {
+        await haltAutomation(`Cron mode failure on ${jobName}`, {
+            jobName,
+            error: (status as { error?: string | null }).error ?? null,
+            lastError: (status as { lastError?: string | null }).lastError ?? null,
+        });
+    }
+};
 jobsEvents.on("job:finished", (event) => {
     void emitWeekSnapshot().catch((error) => {
         server.log.error({ error }, "emitWeekSnapshot failed");
@@ -3050,12 +3419,43 @@ jobsEvents.on("job:finished", (event) => {
     if (jobName === "run-week" || jobName === "transition-lock" || jobName === "transition-start") {
         void runAutoShowcase();
     }
-});
 
+    void maybeEscalateAutomationFailure(event as { name?: string; status?: Record<string, unknown> }).catch((error) => {
+        server.log.error({ error }, "automation halt escalation failed");
+    });
+});
 let automationTickRunning = false;
 let lastAutomationUnsupportedAlertAt = 0;
-const startAutomationJob = async (name: string, args: string[]) => {
-    await startJob(name, "npm", args);
+const startAutomationJob = async (name: string, _args: string[]) => {
+    const runtime = await resolveAutomationRuntime();
+    const envOverrides = {
+        AUTOMATION_MODE_EFFECTIVE: runtime.mode,
+    };
+    if (name === "run-week") {
+        await startJob(name, "node", ["dist/jobs/job-week.js"], envOverrides);
+        return;
+    }
+    if (name === "transition-lock") {
+        await startJob(name, "node", ["dist/jobs/run-transition.js", "lock"], envOverrides);
+        return;
+    }
+    if (name === "transition-start") {
+        await startJob(name, "node", ["dist/jobs/run-transition.js", "start"], envOverrides);
+        return;
+    }
+    if (name === "finalize") {
+        await startJob(name, "node", ["dist/jobs/run-finalize.js"], envOverrides);
+        return;
+    }
+    if (name === "finalize-audit") {
+        await startJob(name, "node", ["dist/jobs/run-finalize-audit.js"], envOverrides);
+        return;
+    }
+    if (name === "refresh-week-coins") {
+        await startJob(name, "node", ["dist/jobs/run-refresh-week-coins.js"], envOverrides);
+        return;
+    }
+    await startJob(name, "node", ["dist/jobs/job-week.js"], envOverrides);
 };
 const runAutomationTick = async () => {
     if (automationTickRunning)
@@ -3067,55 +3467,120 @@ const runAutomationTick = async () => {
         const automation = await resolveAutomationRuntime();
         if (automation.mode === "MANUAL")
             return;
+        if (automation.failoverActive) {
+            return;
+        }
         if (automation.mode === "REACTIVE" && !automation.reactiveSupported) {
             const now = Date.now();
             if (now - lastAutomationUnsupportedAlertAt >= AUTOMATION_UNSUPPORTED_ALERT_COOLDOWN_MS) {
                 lastAutomationUnsupportedAlertAt = now;
-                server.log.warn({ automation }, "Reactive automation unsupported for current profile");
-                await insertErrorEvent({
-                    event_id: String(now) + "-" + Math.random().toString(16).slice(2),
-                    source: "oracle-automation",
-                    severity: "warn",
-                    category: "automation",
-                    message: automation.supportReason,
-                    path: "/automation/tick",
-                    method: "SYSTEM",
-                    status_code: 409,
-                    context_json: safeJsonStringify(automation),
-                    created_at: new Date(now).toISOString(),
-                }).catch(() => {});
+                server.log.warn({ automation }, "Reactive automation unsupported for current profile; halting");
             }
+            await haltAutomation(automation.supportReason, {
+                supportReason: automation.supportReason,
+                chainType: automation.chainType,
+                chainId: automation.chainId,
+                chainKey: automation.chainKey,
+            });
             return;
         }
         const weeks = await getWeeks();
-        const current = weeks[0];
+        let current = weeks[0];
         if (!current) {
             await startAutomationJob("run-week", ["run", "job:week"]);
             return;
         }
+        const leagueAddress = await getRuntimeValcoreAddress().catch(() => null);
+        if (leagueAddress) {
+            const drift = await reconcileWeekStatusDrift({
+                context: "automation-tick",
+                weekId: current.id,
+                dbStatus: String(current.status ?? ""),
+                leagueAddress,
+            });
+            if (drift.reconciled) {
+                const refreshed = await getWeekById(String(current.id));
+                if (refreshed) {
+                    current = refreshed;
+                }
+            }
+        }
         const status = String(current.status ?? "").toUpperCase();
         const nowMs = Date.now();
+        const createdAtMs = Date.parse(String(current.created_at ?? ""));
+        const startAtMs = Date.parse(String(current.start_at ?? ""));
         const lockAtMs = Date.parse(String(current.lock_at ?? ""));
         const endAtMs = Date.parse(String(current.end_at ?? ""));
         const finalizedAtMs = Date.parse(String(current.finalized_at ?? ""));
+        const isReactiveMode = automation.mode === "REACTIVE";
         if (status === "PREPARING") {
+            if (isReactiveMode) {
+                const preparingBaselineMs = Number.isFinite(createdAtMs) ? createdAtMs : lockAtMs;
+                if (Number.isFinite(preparingBaselineMs) && nowMs >= preparingBaselineMs + REACTIVE_STALL_GRACE_MS) {
+                    await haltAutomation("Reactive week creation missed deadline", {
+                        weekId: current.id,
+                        status,
+                        createdAt: current.created_at ?? null,
+                        lockAt: current.lock_at ?? null,
+                        nowMs,
+                        graceMs: REACTIVE_STALL_GRACE_MS,
+                    });
+                }
+            }
             await startAutomationJob("run-week", ["run", "job:week"]);
             return;
         }
         if (status === "DRAFT_OPEN") {
-            if (Number.isFinite(lockAtMs) && nowMs >= lockAtMs) {
+            const lineups = await getLineups(current.id);
+            const runtime = await getRuntimeChainConfig().catch(() => null);
+            const runtimeChainType = String(runtime?.chainType ?? "").toLowerCase();
+            const hasSentinelKey = String(env.SENTINEL_PRIVATE_KEY ?? "").trim().length > 0;
+            const hasSentinelAccount = String(env.SENTINEL_ACCOUNT_ADDRESS ?? "").trim().length > 0;
+            const canAutoCommitSentinel =
+                (runtimeChainType === "evm" && hasSentinelKey) ||
+                (runtimeChainType === "starknet" && hasSentinelKey && hasSentinelAccount);
+            const draftWindowElapsed = Number.isFinite(lockAtMs) && nowMs >= lockAtMs;
+
+            if (lineups.length === 0 && canAutoCommitSentinel) {
                 await startAutomationJob("transition-lock", ["run", "job:transition", "--", "lock"]);
+                return;
             }
+
+            if (lineups.length === 0 && draftWindowElapsed) {
+                if (isReactiveMode) {
+                    await haltAutomation("Reactive lock transition missed deadline (no committed strategy in draft window)", {
+                        weekId: current.id,
+                        status,
+                        lockAt: current.lock_at,
+                        nowMs,
+                        reason: "no-committed-strategy",
+                    });
+                }
+                return;
+            }
+        if (draftWindowElapsed) {
+            await startAutomationJob("transition-lock", ["run", "job:transition", "--", "lock"]);
+            return;
+        }
+            if (isReactiveMode)
+                return;
             return;
         }
         if (status === "LOCKED") {
+            const startBaselineMs = Number.isFinite(startAtMs) ? startAtMs : lockAtMs;
+            if (Number.isFinite(startBaselineMs) && nowMs < startBaselineMs) {
+                return;
+            }
             await startAutomationJob("transition-start", ["run", "job:transition", "--", "start"]);
             return;
         }
         if (status === "ACTIVE") {
             if (Number.isFinite(endAtMs) && nowMs >= endAtMs) {
                 await startAutomationJob("finalize", ["run", "job:finalize"]);
+                return;
             }
+            if (isReactiveMode)
+                return;
             return;
         }
         if (status === "FINALIZE_PENDING") {
@@ -3139,7 +3604,7 @@ const runAutomationTick = async () => {
         }
     }
     catch (error) {
-        server.log.error({ error }, "runAutomationTick failed");
+        server.log.error({ err: error }, "runAutomationTick failed");
     }
     finally {
         automationTickRunning = false;
@@ -3158,7 +3623,7 @@ const runAutoMomentum = async () => {
     const current = weeks[0];
     if (!current || current.status === "FINALIZED" || current.status === "FINALIZE_PENDING")
         return;
-    await startJob("momentum-live", "npm", ["run", "job:momentum-live"]);
+    await startJob("momentum-live", "node", ["dist/jobs/run-momentum-live.js"]);
 };
 setInterval(() => {
     void runAutoMomentum().catch((error) => {
@@ -3229,6 +3694,15 @@ setInterval(() => {
 void runMockScoreSnapshotTick();
 const port = Number(env.ORACLE_PORT || process.env.PORT || "3101");
 server.listen({ port, host: "0.0.0.0" });
+
+
+
+
+
+
+
+
+
 
 
 

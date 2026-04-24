@@ -250,7 +250,6 @@ export default function OpsFinancePage() {
   });
   const [selectedAllTimePlayer, setSelectedAllTimePlayer] = useState<string>("");
   const stablecoinDecimals = profile.stablecoinDecimals || 18;
-  const stablecoinSymbol = profile.stablecoinSymbol || "Stablecoin";
   const formatAmount = useCallback(
     (wei?: string | null) => formatStableAmount(wei, stablecoinDecimals),
     [stablecoinDecimals],

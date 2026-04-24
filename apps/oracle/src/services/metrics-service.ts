@@ -1,6 +1,6 @@
 import { env } from "../env.js";
 import { ApiError, fetchJsonWithRetry, sleep, withConcurrency } from "./api-client.js";
-import { fetchBinanceKlines } from "./price-service.js";
+import { fetchBinanceKlines, getBinanceIntervalMs } from "./price-service.js";
 
 type MarketChart = {
   prices: [number, number][];
@@ -34,6 +34,7 @@ const COINGECKO_RATE_MS = 2500;
 const BINANCE_RATE_MS = 200;
 const BINANCE_METRICS_CONCURRENCY = Math.max(1, Number(env.SNAPSHOT_METRICS_BINANCE_CONCURRENCY ?? "6") || 6);
 const BINANCE_METRICS_DELAY_MS = Math.max(0, Number(env.SNAPSHOT_METRICS_BINANCE_DELAY_MS ?? "50") || 50);
+const METRICS_COIN_TIMEOUT_MS = 45000;
 const POWER_RET7_WEIGHT = 1.0;
 const POWER_RET30_WEIGHT = 2.5;
 const POWER_MA_WEIGHT = 1.5;
@@ -203,25 +204,47 @@ const fetchBinanceMarketChartRange = async (
 ): Promise<MarketChart> => {
   const prices: [number, number][] = [];
   const totalVolumes: [number, number][] = [];
+  const interval = "1h";
+  const intervalMs = getBinanceIntervalMs(interval);
+  const pageLimit = 1000;
   let cursor = startMs;
   let guard = 0;
 
   while (cursor < endMs && guard < 20) {
-    const klines = await fetchBinanceKlines(symbol, "1h", cursor, endMs, 1000);
+    const klines = await fetchBinanceKlines(symbol, interval, cursor, endMs, pageLimit);
     if (!klines.length) break;
     const chart = buildMarketChartFromKlines(klines);
     prices.push(...chart.prices);
     totalVolumes.push(...chart.total_volumes);
+
     const lastTime = klines[klines.length - 1][0];
-    if (!Number.isFinite(lastTime) || lastTime <= cursor) break;
-    cursor = lastTime + 1;
+    if (!Number.isFinite(lastTime) || lastTime < cursor) break;
+
+    // Binance returns up to limit rows; if fewer arrived, range is exhausted.
+    if (klines.length < pageLimit) break;
+
+    const nextCursor = lastTime + intervalMs;
+    if (!Number.isFinite(nextCursor) || nextCursor <= cursor) break;
+    cursor = nextCursor;
     guard += 1;
     await sleep(BINANCE_RATE_MS);
   }
 
   return { prices, total_volumes: totalVolumes };
 };
-
+const withTimeoutFallback = async <T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> => {
+  let timer: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
 const fetchBinanceMarketChart = async (symbol: string, days: number): Promise<MarketChart> => {
   const endMs = Date.now();
   const startMs = endMs - days * 24 * 60 * 60 * 1000;
@@ -429,11 +452,16 @@ export const computeSnapshotMetrics = async (
 
   if (forceBinance) {
     const targets = coins.map((coin, index) => ({ coin, index }));
+    let completed = 0;
     const resolved = await withConcurrency(targets, BINANCE_METRICS_CONCURRENCY, async ({ coin, index }) => {
       if (BINANCE_METRICS_DELAY_MS > 0) {
         await sleep((index % BINANCE_METRICS_CONCURRENCY) * BINANCE_METRICS_DELAY_MS);
       }
-      const metric = await resolveCoinMetrics(coin, true);
+      const metric = await withTimeoutFallback(resolveCoinMetrics(coin, true), METRICS_COIN_TIMEOUT_MS, { raw: { rawPower: 0, rawRisk: 0, rawMomentum: 0 }, power: 50 });
+      completed += 1;
+      if (completed % 10 === 0 || completed === targets.length) {
+        console.log(`[metrics] progress ${completed}/${targets.length}`);
+      }
       return { coinId: coin.id, metric };
     });
     for (const row of resolved) {
@@ -442,7 +470,7 @@ export const computeSnapshotMetrics = async (
     }
   } else {
     for (const coin of coins) {
-      const metric = await resolveCoinMetrics(coin, false);
+      const metric = await withTimeoutFallback(resolveCoinMetrics(coin, false), METRICS_COIN_TIMEOUT_MS, { raw: { rawPower: 0, rawRisk: 0, rawMomentum: 0 }, power: 50 });
       rawByCoin.set(coin.id, metric.raw);
       powerByCoin.set(coin.id, metric.power);
       await sleep(COINGECKO_RATE_MS);

@@ -43,6 +43,7 @@ const MAX_ATTEMPTS = toPositiveInt(env.CHAIN_TX_MAX_ATTEMPTS, 4);
 const FEE_BUMP_BPS = toNonNegativeInt(env.CHAIN_TX_FEE_BUMP_BPS, 1500);
 const GAS_LIMIT_BUFFER_BPS = toNonNegativeInt(env.CHAIN_TX_GAS_LIMIT_BUFFER_BPS, 2000);
 const CONFIRMATIONS = toPositiveInt(env.CHAIN_TX_CONFIRMATIONS, 1);
+const WAIT_TIMEOUT_MS = toPositiveInt(env.CHAIN_TX_WAIT_TIMEOUT_MS, 180000);
 
 const RETRYABLE_HINTS = [
   "replacement fee too low",
@@ -62,6 +63,22 @@ const RETRYABLE_HINTS = [
 ];
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> => {
+  let timeoutHandle: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
+};
 
 const bumpByAttempt = (value: bigint, attempt: number) => {
   if (attempt <= 1 || FEE_BUMP_BPS <= 0) return value;
@@ -85,6 +102,26 @@ const isRetryableError = (error: unknown) => {
   return RETRYABLE_HINTS.some((hint) => message.includes(hint));
 };
 
+
+const waitForReceiptWithTimeout = async (
+  tx: TxResponseLike,
+  confirmations: number,
+  timeoutMs: number,
+): Promise<ethers.TransactionReceipt | null> => {
+  let timeoutHandle: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      tx.wait(confirmations),
+      new Promise<null>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(`tx confirmation timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
+};
 const buildFeeOverrides = async (
   signer: ethers.Signer,
   attempt: number,
@@ -93,7 +130,7 @@ const buildFeeOverrides = async (
   if (!provider) {
     throw new Error("Signer provider is missing for tx policy");
   }
-  const feeData = await provider.getFeeData();
+  const feeData = await withTimeout(provider.getFeeData(), WAIT_TIMEOUT_MS, "getFeeData()");
   const overrides: TxOverrides = {};
   if (feeData.maxFeePerGas != null && feeData.maxPriorityFeePerGas != null) {
     overrides.maxFeePerGas = bumpByAttempt(feeData.maxFeePerGas, attempt);
@@ -119,12 +156,12 @@ export const sendTxWithPolicy = async ({
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     const overrides = await buildFeeOverrides(signer, attempt);
     if (estimateGas) {
-      const estimated = await estimateGas(overrides);
+      const estimated = await withTimeout(estimateGas(overrides), WAIT_TIMEOUT_MS, `${label} estimateGas`);
       overrides.gasLimit = addGasLimitBuffer(estimated);
     }
     try {
-      const tx = await send(overrides);
-      const receipt = await tx.wait(CONFIRMATIONS);
+      const tx = await withTimeout(send(overrides), WAIT_TIMEOUT_MS, `${label} sendTx`);
+      const receipt = await waitForReceiptWithTimeout(tx, CONFIRMATIONS, WAIT_TIMEOUT_MS);
       if (!receipt) {
         throw new Error(`${label} returned empty receipt`);
       }
@@ -147,3 +184,5 @@ export const sendTxWithPolicy = async ({
     `${label} failed: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
   );
 };
+
+

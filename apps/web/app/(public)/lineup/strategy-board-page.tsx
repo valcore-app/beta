@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
 import dynamic from "next/dynamic";
@@ -66,14 +66,12 @@ import {
 import {
   buildLineupHash,
   buildSlots,
-  clamp,
   createLineup,
   formatPct,
   formatPnl,
   formatPrice,
   formatSalary,
   formatScore,
-  formatSignedStableAmount,
   formatStableAmount,
   formatWeekStartUtc,
   parseClaimedFlag,
@@ -397,6 +395,27 @@ const ProtocolGuideModal = dynamic(
 
 type DbLineupFetchState = "idle" | "found" | "not_found" | "error";
 
+type ReactiveFlowEvent = {
+  id: string;
+  operation: string;
+  status: string;
+  sepoliaTxHash: string | null;
+  sepoliaTxUrl: string | null;
+  reactiveTxHash: string | null;
+  reactiveTxUrl: string | null;
+  updatedAt: string;
+};
+
+type ReactiveFlowResponse = {
+  weekId: string;
+  events: ReactiveFlowEvent[];
+};
+
+const shortenReactiveHash = (hash: string) => {
+  if (!hash || hash.length < 14) return hash;
+  return `${hash.slice(0, 8)}...${hash.slice(-6)}`;
+};
+
 type AssetPoolRowProps = {
   asset: Asset;
   metrics: AssetMetrics;
@@ -497,7 +516,6 @@ export default function LineupPage() {
     getWalletClient,
     getStarknetWallet,
     publicClient,
-    isCorrectNetwork,
   } = useWallet();
   const { week, setMoves, swapMode, setSwapMode } = useHudContext();
   const weekId = week?.id ?? null;
@@ -534,6 +552,9 @@ export default function LineupPage() {
   const [sortKey, setSortKey] = useState<SortKey>("rank");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [commitOpen, setCommitOpen] = useState(false);
+  const [reactivePanelOpen, setReactivePanelOpen] = useState(true);
+  const [reactiveFlowLoading, setReactiveFlowLoading] = useState(false);
+  const [reactiveFlowEvents, setReactiveFlowEvents] = useState<ReactiveFlowEvent[]>([]);
   const [onchainDeposit, setOnchainDeposit] = useState<bigint | null>(null);
   const [onchainPositionResolved, setOnchainPositionResolved] = useState(false);
   const [allocation, setAllocation] = useState(0);
@@ -616,9 +637,6 @@ export default function LineupPage() {
   const [nextClaimableSummary, setNextClaimableSummary] = useState<ClaimableWeekSummary | null>(
     null,
   );
-  const protectionRef = useRef<HTMLDivElement | null>(null);
-  const multiplierRef = useRef<HTMLDivElement | null>(null);
-
   const hasDbLineupCommit = Boolean(
     dbLineupIds && Object.values(dbLineupIds).some((coinId) => Boolean(coinId)),
   );
@@ -657,7 +675,7 @@ export default function LineupPage() {
     } catch {
       // Ignore coin cache read issues.
     }
-  }, [weekId]);
+  }, [weekId, weekStatus]);
 
   useLayoutEffect(() => {
     if (!weekId) {
@@ -714,6 +732,45 @@ export default function LineupPage() {
     const timer = window.setInterval(() => setCooldownNowMs(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [isCooldownView]);
+
+  useEffect(() => {
+    if (Number(activeProfile.chainId) !== 11155111) {
+      setReactiveFlowEvents([]);
+      setReactiveFlowLoading(false);
+      return;
+    }
+    if (!weekId) {
+      setReactiveFlowEvents([]);
+      setReactiveFlowLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const loadReactiveFlow = async () => {
+      if (!cancelled) setReactiveFlowLoading(true);
+      try {
+        const response = await apiGet<ReactiveFlowResponse>(`/weeks/${weekId}/reactive-flow?limit=50`);
+        if (cancelled) return;
+        setReactiveFlowEvents(Array.isArray(response?.events) ? response.events : []);
+      } catch {
+        if (!cancelled) {
+          setReactiveFlowEvents([]);
+        }
+      } finally {
+        if (!cancelled) setReactiveFlowLoading(false);
+      }
+    };
+
+    void loadReactiveFlow();
+    const timer = window.setInterval(() => {
+      void loadReactiveFlow();
+    }, 15000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeProfile.chainId, weekId]);
 
   const cooldownCountdownLabel = useMemo(() => {
     const cooldownEndsAt = week?.cooldownEndsAtUtc ? Date.parse(week.cooldownEndsAtUtc) : NaN;
@@ -1611,7 +1668,7 @@ for (const week of finalized) {
       window.clearInterval(interval);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [startPriceTransition, weekId]);
+  }, [startPriceTransition, weekId, weekStatus]);
 
   useEffect(() => {
     const prev = lastPriceRef.current;
@@ -1731,7 +1788,6 @@ for (const week of finalized) {
   const swapsRemaining = Math.max(totalMoves - swapCount, 0);
   const isTargeting = canUseWeekControls && Boolean(selectedCandidate && !selectedCandidate.inLineup);
   const targetRole = isTargeting ? selectedCandidate?.role ?? null : null;
-  const targetRoleLabel = targetRole ? roleMeta[targetRole].label : "";
   const candidateAsset = useMemo(() => {
     if (!selectedCandidate) return null;
     return coins.find((asset) => asset.id === selectedCandidate.id) ?? null;
@@ -4007,8 +4063,6 @@ for (const week of finalized) {
     const isSwapTarget = canUseWeekControls && isSwapModeActive && isSelected;
     const isTargetEligible = canUseWeekControls && Boolean(isTargeting && targetRole === slot.role);
     const isTargetDimmed = Boolean(isTargeting && targetRole !== slot.role);
-    const canCandidateSwap = Boolean(isTargetEligible && candidateAsset && asset);
-
     const metrics = asset ? getAssetMetrics(asset) : null;
     const logoSrc = asset?.imagePath || "/coins/default.png";
     const showClear = Boolean(asset) && isSelected;
@@ -4529,7 +4583,7 @@ for (const week of finalized) {
                 </div>
                 <div className="board-cooldown-sub">
                   {isWeekLockedTransition
-                    ? "Draft locked. Waiting for server to start the next epoch."
+                    ? "Draft locked. Initializing the next epoch."
                     : "Validation + cooldown in progress"}
                 </div>
                 {!isWeekLockedTransition ? (
@@ -4960,6 +5014,91 @@ for (const week of finalized) {
         )}
 
       </main>
+      {Number(activeProfile.chainId) === 11155111 ? (
+        <div
+          style={{
+            position: "fixed",
+            left: 12,
+            bottom: 12,
+            zIndex: 65,
+            width: reactivePanelOpen ? "min(92vw, 760px)" : 190,
+            borderRadius: 12,
+            border: "1px solid rgba(67, 200, 141, 0.35)",
+            background: "rgba(16, 43, 34, 0.28)",
+            boxShadow: "0 10px 36px rgba(0,0,0,0.28)",
+            backdropFilter: "blur(12px)",
+            color: "#d8f8e8",
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setReactivePanelOpen((prev) => !prev)}
+            style={{
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              background: "transparent",
+              border: "none",
+              color: "inherit",
+              padding: "10px 12px",
+              fontSize: 12,
+              fontWeight: 600,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              cursor: "pointer",
+            }}
+          >
+            <span>Reactive Flow</span>
+            <span>{reactivePanelOpen ? "Hide" : "Show"}</span>
+          </button>
+          {reactivePanelOpen ? (
+            <div style={{ maxHeight: "60vh", overflowY: "auto", overflowX: "hidden", padding: "0 10px 10px" }}>
+              {reactiveFlowLoading ? (
+                <div style={{ fontSize: 11, opacity: 0.8, padding: "6px 2px" }}>Syncing...</div>
+              ) : null}
+              {(reactiveFlowEvents || []).map((event) => (
+                <div
+                  key={event.id}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr auto",
+                    gap: 8,
+                    alignItems: "center",
+                    fontSize: 11,
+                    padding: "6px 4px",
+                    borderTop: "1px solid rgba(124, 235, 175, 0.16)",
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {event.operation} | {event.status}
+                    </div>
+                    <div style={{ opacity: 0.66, fontSize: 10 }}>{event.updatedAt}</div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, minWidth: 320, whiteSpace: "nowrap" }}>
+                    {event.reactiveTxHash && event.reactiveTxUrl ? (
+                      <a
+                        href={event.reactiveTxUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: "#9fffd6", textDecoration: "underline" }}
+                      >
+                        Reactive: {shortenReactiveHash(event.reactiveTxHash)}
+                      </a>
+                    ) : (
+                      <span style={{ opacity: 0.58 }}>Reactive: --</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {!reactiveFlowLoading && (!reactiveFlowEvents || reactiveFlowEvents.length === 0) ? (
+                <div style={{ fontSize: 11, opacity: 0.72, padding: "8px 4px" }}>No reactive tx yet.</div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {commitOpen ? (
         <div className="commit-modal">

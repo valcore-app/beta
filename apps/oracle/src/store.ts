@@ -1,4 +1,4 @@
-// @ts-nocheck
+﻿// @ts-nocheck
 import { queryRead, queryWrite, withWriteTransaction, } from "./db/db.js";
 /**
  * Postgres-based store
@@ -16,10 +16,11 @@ export const upsertWeek = async (week) => {
   `, [week.id, week.start_at, week.lock_at, week.end_at, week.status]);
 };
 export const getWeeks = async () => {
-    return queryRead("SELECT * FROM weeks ORDER BY start_at DESC");
+    // Week state drives automation and on-chain transitions; read from write DB to avoid replica lag.
+    return queryWrite("SELECT * FROM weeks ORDER BY id::bigint DESC");
 };
 export const getWeekById = async (weekId) => {
-    const rows = await queryRead("SELECT * FROM weeks WHERE id = $1", [weekId]);
+    const rows = await queryWrite("SELECT * FROM weeks WHERE id = $1", [weekId]);
     return rows[0];
 };
 export const updateWeekStatus = async (weekId, status) => {
@@ -346,7 +347,10 @@ export const upsertLifecycleTxIntent = async (intent) => {
       week_id = COALESCE(EXCLUDED.week_id, lifecycle_tx_intents.week_id),
       operation = EXCLUDED.operation,
       details_json = COALESCE(EXCLUDED.details_json, lifecycle_tx_intents.details_json),
-      updated_at = now()::text
+      updated_at = CASE
+        WHEN lifecycle_tx_intents.status IN ('completed', 'failed') THEN now()::text
+        ELSE lifecycle_tx_intents.updated_at
+      END
     RETURNING *
   `, [
         intent.op_key,
@@ -376,13 +380,12 @@ export const markLifecycleTxIntentSubmitted = async (id, txHash, detailsJson) =>
     UPDATE lifecycle_tx_intents
     SET
       status = CASE WHEN status = 'completed' THEN status ELSE 'submitted' END,
-      tx_hash = COALESCE(tx_hash, $2),
+      tx_hash = CASE WHEN status = 'completed' THEN tx_hash ELSE $2 END,
       details_json = COALESCE($3, details_json),
-      last_error = null,
+      last_error = CASE WHEN status = 'completed' THEN last_error ELSE null END,
       resolved_at = CASE WHEN status = 'completed' THEN resolved_at ELSE null END,
       updated_at = now()::text
     WHERE id = $1
-      AND (tx_hash IS NULL OR tx_hash = $2)
     RETURNING *
   `, [id, String(txHash ?? '').toLowerCase(), detailsJson ?? null]);
     return rows[0] ?? null;
@@ -415,7 +418,62 @@ export const markLifecycleTxIntentFailed = async (id, errorMessage, detailsJson)
   `, [id, errorMessage ?? null, detailsJson ?? null]);
     return rows[0] ?? null;
 };
-// ==================== MOCK LINEUPS ====================
+export const listLifecycleReactiveEvents = async ({ weekId, limit = 20 }: { weekId?: string | null; limit?: number }) => {
+    const safeLimit = Number.isFinite(Number(limit)) ? Math.max(1, Math.min(50, Math.trunc(Number(limit)))) : 20;
+    if (weekId && String(weekId).trim()) {
+        return queryRead(
+      `SELECT
+         id,
+         op_key,
+         week_id,
+         operation,
+         status,
+         COALESCE(
+           details_json::jsonb->>'reactiveTxHash',
+           details_json::jsonb->'reactive'->>'txHash',
+           details_json::jsonb->>'reactive_tx_hash',
+           tx_hash
+         ) AS reactive_tx_hash,
+         COALESCE(
+           details_json::jsonb->>'destinationTxHash',
+           details_json::jsonb->'reactive'->>'destinationTxHash',
+           details_json::jsonb->>'destination_tx_hash'
+         ) AS destination_tx_hash,
+         created_at,
+         updated_at
+       FROM lifecycle_tx_intents
+       WHERE week_id = $1
+       ORDER BY updated_at::timestamptz DESC NULLS LAST, created_at::timestamptz DESC
+       LIMIT $2`,
+      [String(weekId), safeLimit],
+    );
+    }
+    return queryRead(
+    `SELECT
+       id,
+       op_key,
+       week_id,
+       operation,
+       status,
+       COALESCE(
+         details_json::jsonb->>'reactiveTxHash',
+         details_json::jsonb->'reactive'->>'txHash',
+         details_json::jsonb->>'reactive_tx_hash',
+         tx_hash
+       ) AS reactive_tx_hash,
+       COALESCE(
+         details_json::jsonb->>'destinationTxHash',
+         details_json::jsonb->'reactive'->>'destinationTxHash',
+         details_json::jsonb->>'destination_tx_hash'
+       ) AS destination_tx_hash,
+       created_at,
+       updated_at
+     FROM lifecycle_tx_intents
+     ORDER BY updated_at::timestamptz DESC NULLS LAST, created_at::timestamptz DESC
+     LIMIT $1`,
+    [safeLimit],
+  );
+};// ==================== MOCK LINEUPS ====================
 export const replaceMockLineups = async (weekId, rows) => {
     await withWriteTransaction(async (client) => {
         await client.query("DELETE FROM mock_lineups WHERE week_id = $1", [weekId]);
@@ -2044,7 +2102,7 @@ export const updateJobRun = async (id, patch) => {
     ]);
 };
 export const getLatestWeekId = async () => {
-    const rows = await queryRead("SELECT id FROM weeks ORDER BY start_at DESC LIMIT 1");
+    const rows = await queryRead("SELECT id FROM weeks ORDER BY id::bigint DESC LIMIT 1");
     return rows[0]?.id ?? null;
 };
 export const listJobRunIncidents = async (limit = 50) => {
@@ -2274,6 +2332,8 @@ export const getSelfHealSummary = async () => {
         recovered: recoveredRows[0]?.count ?? 0,
     };
 };
+
+
 
 
 

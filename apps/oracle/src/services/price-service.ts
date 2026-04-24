@@ -87,3 +87,15 @@ export const fetchBinanceKlines = async (
     { maxRetries: 2, timeoutMs: 10000 },
   );
 };
+
+export const getBinanceIntervalMs = (interval: string): number => {
+  const normalized = String(interval ?? "").trim().toLowerCase();
+  if (normalized === "1m") return 60 * 1000;
+  if (normalized === "5m") return 5 * 60 * 1000;
+  if (normalized === "15m") return 15 * 60 * 1000;
+  if (normalized === "30m") return 30 * 60 * 1000;
+  if (normalized === "1h") return 60 * 60 * 1000;
+  if (normalized === "4h") return 4 * 60 * 60 * 1000;
+  if (normalized === "1d") return 24 * 60 * 60 * 1000;
+  return 60 * 60 * 1000;
+};

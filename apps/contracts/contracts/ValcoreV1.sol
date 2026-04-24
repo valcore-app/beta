@@ -43,6 +43,7 @@ contract ValcoreV1 is AccessControl, Pausable, ReentrancyGuard {
   error RewardAlreadySwept();
   error NoSweepableReward();
   error NoCommittedStrategies();
+  error IntentAlreadyExecuted();
 
   // ==================== CONSTANTS ====================
   bytes32 public constant ORACLE_ROLE = keccak256("ORACLE_ROLE");
@@ -52,6 +53,13 @@ contract ValcoreV1 is AccessControl, Pausable, ReentrancyGuard {
   uint256 public constant BPS = 10_000;
   uint8 public constant MAX_SWAPS = 10;
   uint256 public constant REWARD_SWEEP_DELAY = 180 days;
+
+  uint8 private constant ACTION_CREATE = 1;
+  uint8 private constant ACTION_LOCK = 2;
+  uint8 private constant ACTION_START = 3;
+  uint8 private constant ACTION_FINALIZE = 4;
+  uint8 private constant ACTION_APPROVE = 5;
+  uint8 private constant ACTION_REJECT = 6;
 
   enum WeekStatus {
     NONE,
@@ -93,6 +101,7 @@ contract ValcoreV1 is AccessControl, Pausable, ReentrancyGuard {
 
   mapping(uint256 => WeekState) public weekStates;
   mapping(uint256 => mapping(address => UserPosition)) public positions;
+  mapping(bytes32 => bool) public lifecycleIntentExecuted;
 
   event WeekCreated(uint256 indexed weekId, uint64 startAt, uint64 lockAt, uint64 endAt);
   event WeekLocked(uint256 indexed weekId);
@@ -110,6 +119,7 @@ contract ValcoreV1 is AccessControl, Pausable, ReentrancyGuard {
   event EmergencyExit(uint256 indexed weekId, address indexed user, uint256 amount);
   event RewardSwept(uint256 indexed weekId, address indexed user, address indexed caller, uint256 amount);
   event TestModeChanged(bool enabled);
+  event LifecycleIntentConsumed(bytes32 indexed intentId, uint8 indexed action, uint256 indexed weekId, address caller);
 
   constructor(
     address stablecoinToken,
@@ -246,6 +256,133 @@ contract ValcoreV1 is AccessControl, Pausable, ReentrancyGuard {
     emit WeekFinalizationRejected(weekId);
   }
 
+  function createWeekWithIntent(bytes32 intentId, uint256 weekId, uint64 startAt, uint64 lockAt, uint64 endAt)
+    external
+    onlyRole(ORACLE_ROLE)
+  {
+    _consumeLifecycleIntent(intentId, ACTION_CREATE, weekId);
+
+    WeekState storage week = weekStates[weekId];
+    if (week.status != uint8(WeekStatus.NONE)) revert WeekAlreadyExists();
+    if (lockAt > startAt || startAt >= endAt) revert InvalidTimeRange();
+
+    week.startAt = startAt;
+    week.lockAt = lockAt;
+    week.endAt = endAt;
+    week.status = uint8(WeekStatus.DRAFT_OPEN);
+
+    emit WeekCreated(weekId, startAt, lockAt, endAt);
+  }
+
+  function lockWeekWithIntent(bytes32 intentId, uint256 weekId) external onlyRole(ORACLE_ROLE) {
+    _consumeLifecycleIntent(intentId, ACTION_LOCK, weekId);
+
+    WeekState storage week = weekStates[weekId];
+    if (week.status != uint8(WeekStatus.DRAFT_OPEN)) revert DraftNotOpen();
+    if (week.riskCommitted == 0) revert NoCommittedStrategies();
+    if (block.timestamp < week.lockAt) revert LockTimeNotReached();
+    week.status = uint8(WeekStatus.LOCKED);
+    emit WeekLocked(weekId);
+  }
+
+  function startWeekWithIntent(bytes32 intentId, uint256 weekId) external onlyRole(ORACLE_ROLE) {
+    _consumeLifecycleIntent(intentId, ACTION_START, weekId);
+
+    WeekState storage week = weekStates[weekId];
+    if (week.status != uint8(WeekStatus.LOCKED)) revert WeekNotLocked();
+    if (block.timestamp < week.startAt) revert StartTimeNotReached();
+    week.status = uint8(WeekStatus.ACTIVE);
+    emit WeekStarted(weekId);
+  }
+
+  function forceLockWeekWithIntent(bytes32 intentId, uint256 weekId) external onlyRole(ORACLE_ROLE) {
+    _consumeLifecycleIntent(intentId, ACTION_LOCK, weekId);
+
+    WeekState storage week = weekStates[weekId];
+    if (week.status != uint8(WeekStatus.DRAFT_OPEN)) revert DraftNotOpen();
+    if (week.riskCommitted == 0) revert NoCommittedStrategies();
+    week.status = uint8(WeekStatus.LOCKED);
+    emit WeekLocked(weekId);
+  }
+
+  function forceStartWeekWithIntent(bytes32 intentId, uint256 weekId) external onlyRole(ORACLE_ROLE) {
+    _consumeLifecycleIntent(intentId, ACTION_START, weekId);
+
+    WeekState storage week = weekStates[weekId];
+    if (week.status != uint8(WeekStatus.LOCKED)) revert WeekNotLocked();
+    week.status = uint8(WeekStatus.ACTIVE);
+    emit WeekStarted(weekId);
+  }
+
+  function forceFinalizeWeekWithIntent(
+    bytes32 intentId,
+    uint256 weekId,
+    bytes32 merkleRoot,
+    bytes32 metadataHash,
+    uint256 retainedFee
+  ) external onlyRole(ORACLE_ROLE) {
+    _consumeLifecycleIntent(intentId, ACTION_FINALIZE, weekId);
+
+    WeekState storage week = weekStates[weekId];
+    if (week.status != uint8(WeekStatus.ACTIVE)) revert WeekNotActive();
+    if (merkleRoot == bytes32(0)) revert InvalidMerkleRoot();
+
+    if (retainedFee > type(uint128).max) revert DepositTooLarge();
+    if (retainedFee > week.riskCommitted) revert InvalidFee();
+
+    _markFinalizePending(week, weekId, merkleRoot, metadataHash, retainedFee);
+  }
+
+  function finalizeWeekWithIntent(
+    bytes32 intentId,
+    uint256 weekId,
+    bytes32 merkleRoot,
+    bytes32 metadataHash,
+    uint256 retainedFee
+  ) external onlyRole(ORACLE_ROLE) {
+    _consumeLifecycleIntent(intentId, ACTION_FINALIZE, weekId);
+
+    WeekState storage week = weekStates[weekId];
+    if (week.status != uint8(WeekStatus.ACTIVE)) revert WeekNotActive();
+    if (block.timestamp < week.endAt) revert EndTimeNotReached();
+    if (merkleRoot == bytes32(0)) revert InvalidMerkleRoot();
+
+    if (retainedFee > type(uint128).max) revert DepositTooLarge();
+    if (retainedFee > week.riskCommitted) revert InvalidFee();
+
+    _markFinalizePending(week, weekId, merkleRoot, metadataHash, retainedFee);
+  }
+
+  function approveFinalizationWithIntent(bytes32 intentId, uint256 weekId) external onlyRole(AUDITOR_ROLE) {
+    _consumeLifecycleIntent(intentId, ACTION_APPROVE, weekId);
+
+    WeekState storage week = weekStates[weekId];
+    if (week.status != uint8(WeekStatus.FINALIZE_PENDING)) revert WeekNotFinalizePending();
+
+    week.status = uint8(WeekStatus.FINALIZED);
+    uint256 retainedFee = uint256(week.retainedFee);
+    if (retainedFee > 0) {
+      stablecoin.safeTransfer(treasury, retainedFee);
+      emit ProtocolFeeTransferred(weekId, treasury, retainedFee);
+    }
+
+    emit WeekFinalized(weekId, week.merkleRoot, week.metadataHash);
+  }
+
+  function rejectFinalizationWithIntent(bytes32 intentId, uint256 weekId) external onlyRole(AUDITOR_ROLE) {
+    _consumeLifecycleIntent(intentId, ACTION_REJECT, weekId);
+
+    WeekState storage week = weekStates[weekId];
+    if (week.status != uint8(WeekStatus.FINALIZE_PENDING)) revert WeekNotFinalizePending();
+
+    week.status = uint8(WeekStatus.ACTIVE);
+    week.finalizedAt = 0;
+    week.retainedFee = 0;
+    week.merkleRoot = bytes32(0);
+    week.metadataHash = bytes32(0);
+
+    emit WeekFinalizationRejected(weekId);
+  }
   function commitLineup(uint256 weekId, bytes32 lineupHash, uint256 depositAmount)
     external
     whenNotPaused
@@ -441,6 +578,12 @@ contract ValcoreV1 is AccessControl, Pausable, ReentrancyGuard {
     return block.timestamp >= uint256(week.finalizedAt) + REWARD_SWEEP_DELAY;
   }
 
+  function _consumeLifecycleIntent(bytes32 intentId, uint8 action, uint256 weekId) internal {
+    if (intentId == bytes32(0)) revert InvalidHash();
+    if (lifecycleIntentExecuted[intentId]) revert IntentAlreadyExecuted();
+    lifecycleIntentExecuted[intentId] = true;
+    emit LifecycleIntentConsumed(intentId, action, weekId, msg.sender);
+  }
   function _markFinalizePending(
     WeekState storage week,
     uint256 weekId,
@@ -457,3 +600,7 @@ contract ValcoreV1 is AccessControl, Pausable, ReentrancyGuard {
     emit WeekFinalizePending(weekId, merkleRoot, metadataHash, retainedFee);
   }
 }
+
+
+
+

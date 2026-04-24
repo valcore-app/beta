@@ -1,4 +1,4 @@
-﻿import { env } from "../env.js";
+import { env } from "../env.js";
 import {
   setWeekCoins,
   upsertCoin,
@@ -7,6 +7,8 @@ import {
   getCoins,
   getCoinsByCategory,
   getWeeks,
+  getWeekById,
+  getWeekCoins,
 } from "../store.js";
 import { POSITION_RULES, COIN_EXCLUDE_KEYWORDS } from "../constants.js";
 import { fetchJsonWithRetry, withConcurrency, sleep } from "../services/api-client.js";
@@ -14,9 +16,9 @@ import { computeSnapshotMetrics, type SnapshotMetric } from "../services/metrics
 import { ensureCoinsDirectory, downloadCoinLogo } from "../services/coin-logo-service.js";
 import { getPricesBySymbols } from "../services/priceOracle.service.js";
 import { fetchBinanceBaseAssets } from "../services/price-service.js";
-import { pathToFileURL } from "url";
 import {
   getRuntimeValcoreAddress,
+  getRuntimeChainConfig,
   isValcoreChainEnabled,
 } from "../network/chain-runtime.js";
 import { createWeekOnchain, getOnchainWeekState } from "../network/valcore-chain-client.js";
@@ -206,6 +208,22 @@ export type RunWeekOptions = {
   refreshCurrentDraft?: boolean;
 };
 
+const extractReactiveTxHash = (error: unknown): string | null => {
+  const direct =
+    typeof error === "object" && error !== null
+      ? String((error as { reactiveTxHash?: unknown }).reactiveTxHash ?? "").trim().toLowerCase()
+      : "";
+  if (/^0x[0-9a-f]{64}$/u.test(direct)) return direct;
+  return null;
+};
+
+const getIntentUpdatedAtMs = (intent: { updated_at?: unknown }) => {
+  const raw = String(intent.updated_at ?? "").trim();
+  if (!raw) return 0;
+  const ms = Date.parse(raw);
+  return Number.isFinite(ms) ? ms : 0;
+};
+
 const assertOnchainDraftWeek = async (input: {
   leagueAddress: string;
   weekId: string;
@@ -253,6 +271,9 @@ export const runWeek = async (options: RunWeekOptions = {}) => {
   let startAt: Date;
   let lockAt: Date;
   let endAt: Date;
+  let draftHoursForSchedule = 23;
+  let weekDaysForSchedule = 6;
+  let scheduleCanSlide = false;
 
   if (refreshCurrentDraft) {
     if (!current || currentStatus !== "DRAFT_OPEN") {
@@ -286,10 +307,97 @@ export const runWeek = async (options: RunWeekOptions = {}) => {
     const draftHours = Number.isFinite(draftHoursRaw) && draftHoursRaw > 0 ? draftHoursRaw : 23;
     const weekDaysRaw = Number(env.WEEK_DURATION_DAYS);
     const weekDays = Number.isFinite(weekDaysRaw) && weekDaysRaw > 0 ? weekDaysRaw : 6;
+    draftHoursForSchedule = draftHours;
+    weekDaysForSchedule = weekDays;
+    scheduleCanSlide = true;
     lockAt = new Date(nowMs + draftHours * 60 * 60 * 1000);
     startAt = lockAt;
     endAt = new Date(lockAt.getTime() + weekDays * 24 * 60 * 60 * 1000);
     weekId = String(Math.floor(startAt.getTime() / 1000));
+  }
+
+  // Fast-path for PREPARING weeks: avoid re-running heavy market/metrics build while
+  // waiting for (or reconciling after) reactive create callback.
+  if (!refreshCurrentDraft && current && currentStatus === "PREPARING") {
+    const chainEnabled = isValcoreChainEnabled();
+    const leagueAddress = chainEnabled ? await getRequiredLeagueAddress("run-week/preparing-fastpath") : null;
+    const chainType = (await getRuntimeChainConfig()).chainType;
+    const isReactiveEvm =
+      chainType === "evm" &&
+      String(process.env.AUTOMATION_MODE_EFFECTIVE ?? env.AUTOMATION_MODE ?? "").trim().toUpperCase() === "REACTIVE";
+    const opKey = `week:${weekId}:create`;
+    const intent = await ensureLifecycleIntent({
+      opKey,
+      weekId,
+      operation: "create-week",
+      details: {
+        startAt: startAt.toISOString(),
+        lockAt: lockAt.toISOString(),
+        endAt: endAt.toISOString(),
+        targetStatus: "DRAFT_OPEN",
+      },
+    });
+    let txHash = intent.tx_hash ? String(intent.tx_hash).toLowerCase() : null;
+    const existingWeekCoins = await getWeekCoins(weekId);
+    const ensureDraftDataPresent = () => {
+      if (existingWeekCoins.length === 0) {
+        throw new Error(
+          `DETERMINISTIC: week ${weekId} is PREPARING but week_coins is empty; run-week cannot reconcile`,
+        );
+      }
+    };
+
+    if (txHash && chainEnabled && leagueAddress) {
+      const onchainWeek = await getOnchainWeekState(leagueAddress, BigInt(weekId));
+      const onchainStatus = Number(onchainWeek.status ?? 0);
+      if (onchainStatus === 1) {
+        ensureDraftDataPresent();
+        await assertOnchainDraftWeek({
+          leagueAddress,
+          weekId,
+          startAt,
+          lockAt,
+          endAt,
+          context: "run-week/preparing-fastpath",
+        });
+        await updateWeekStatus(weekId, "DRAFT_OPEN");
+        await markLifecycleIntentCompleted(intent, {
+          txHash,
+          status: "DRAFT_OPEN",
+          chainExecuted: true,
+          reactiveTxHash: isReactiveEvm ? txHash : null,
+          startAt: startAt.toISOString(),
+          lockAt: lockAt.toISOString(),
+          endAt: endAt.toISOString(),
+        });
+        console.log(`[run-week] fast-path reconciled PREPARING -> DRAFT_OPEN for week ${weekId}`);
+        return;
+      }
+      if (isReactiveEvm) {
+        const intentState = String((intent as { status?: unknown }).status ?? "").toLowerCase();
+        if ((intentState === "failed" || intentState === "error") && onchainStatus === 0) {
+          txHash = null;
+        }
+        const pendingSinceMs = getIntentUpdatedAtMs(intent as { updated_at?: unknown });
+        const reactiveStallGraceMs = Math.max(15_000, Number(env.REACTIVE_STALL_GRACE_SECONDS ?? "120") * 1000);
+        if (pendingSinceMs > 0 && Date.now() - pendingSinceMs > reactiveStallGraceMs && onchainStatus === 0) {
+          txHash = null;
+        }
+        if (!txHash) {
+          // stale reactive tx hash cleared; continue with normal create flow below
+        } else {
+          console.log(
+            `[run-week] fast-path pending reactive callback for week ${weekId}; tx=${txHash}; on-chain status=${onchainStatus}`,
+          );
+          return;
+        }
+      }
+      if (txHash) {
+        throw new Error(
+          `DETERMINISTIC: week ${weekId} create intent submitted but on-chain status is ${onchainStatus} (expected 1)`,
+        );
+      }
+    }
   }
 
   const geckoHeaders = env.COINGECKO_API_KEY
@@ -297,22 +405,59 @@ export const runWeek = async (options: RunWeekOptions = {}) => {
     : undefined;
 
   const existingCoins = await getCoins();
+  const fallbackRankMap = new Map<string, number>();
+  for (const previous of weeks) {
+    if (!previous || String(previous.id) === String(weekId)) continue;
+    const prevWeekCoins = await getWeekCoins(String(previous.id));
+    for (const row of prevWeekCoins) {
+      const coinId = String((row as any).coin_id ?? "");
+      const rankValue = Number((row as any).rank ?? 0);
+      if (!coinId || !Number.isFinite(rankValue) || rankValue <= 0) continue;
+      if (!fallbackRankMap.has(coinId)) {
+        fallbackRankMap.set(coinId, rankValue);
+      }
+    }
+    if (fallbackRankMap.size > 0) break;
+  }
+
+  let marketFetchFailed = false;
+  let marketFetchFailureMessage = "";
   const geckoCoins: GeckoCoin[] = [];
   // Fetch top 300 coins by market cap (3 pages x 100 coins)
   for (let page = 1; page <= 3; page++) {
-    console.log(`[run-week] coingecko markets page=${page} start`);
-    const pageCoins = await fetchJsonWithRetry<GeckoCoin[]>(
-      `${env.COINGECKO_BASE_URL}${COINS_ENDPOINT}?vs_currency=usd&order=market_cap_desc&per_page=100&page=${page}&sparkline=false&price_change_percentage=7d`,
-      geckoHeaders,
-      COINGECKO_MARKET_RETRY_CONFIG,
-    );
-    geckoCoins.push(...pageCoins);
-    console.log(`[run-week] coingecko markets page=${page} done count=${pageCoins.length}`);
+    try {
+      console.log(`[run-week] coingecko markets page=${page} start`);
+      const pageCoins = await fetchJsonWithRetry<GeckoCoin[]>(
+        `${env.COINGECKO_BASE_URL}${COINS_ENDPOINT}?vs_currency=usd&order=market_cap_desc&per_page=100&page=${page}&sparkline=false&price_change_percentage=7d`,
+        geckoHeaders,
+        COINGECKO_MARKET_RETRY_CONFIG,
+      );
+      geckoCoins.push(...pageCoins);
+      console.log(`[run-week] coingecko markets page=${page} done count=${pageCoins.length}`);
+    } catch (error) {
+      marketFetchFailed = true;
+      marketFetchFailureMessage = error instanceof Error ? error.message : String(error);
+      console.warn(`[run-week] coingecko markets page=${page} failed: ${marketFetchFailureMessage}`);
+      break;
+    }
 
     // Rate limit: wait 2s between requests for free API
     if (page < 3) {
       await sleep(COINGECKO_RATE_MS);
     }
+  }
+
+  if (geckoCoins.length === 0) {
+    if (fallbackRankMap.size === 0) {
+      throw new Error(`CoinGecko market universe unavailable and no fallback rank map present: ${marketFetchFailureMessage || "unknown"}`);
+    }
+    console.warn(
+      `[run-week] coingecko markets unavailable; using fallback rank map from previous week size=${fallbackRankMap.size} error=${marketFetchFailureMessage || "unknown"}`
+    );
+  } else if (marketFetchFailed) {
+    console.warn(
+      `[run-week] coingecko markets partially available count=${geckoCoins.length}; filling missing ranks from fallback map size=${fallbackRankMap.size}`
+    );
   }
 
   // Rate limit before next request (stablecoins list)
@@ -368,7 +513,7 @@ export const runWeek = async (options: RunWeekOptions = {}) => {
     stats[categoryId]++;
 
     // Download logo from CoinCap
-    const imagePath = await downloadCoinLogo(symbol, coin.id);
+    const imagePath = await downloadCoinLogo(symbol);
 
     // Insert coin with determined category
     await upsertCoin({
@@ -393,6 +538,15 @@ export const runWeek = async (options: RunWeekOptions = {}) => {
     .filter((coin) => coin.market_cap_rank)
     .sort((a, b) => a.market_cap_rank - b.market_cap_rank);
   const rankMap = new Map(ranked.map((c) => [c.id, c.market_cap_rank || 0]));
+  for (const [coinId, rank] of fallbackRankMap.entries()) {
+    if (!rankMap.has(coinId)) {
+      rankMap.set(coinId, rank);
+    }
+  }
+  if (rankMap.size === 0) {
+    throw new Error("Rank map is empty; cannot build weekly universe deterministically");
+  }
+
 
   // Prepare coins for positions - use eligible coins first, then stables for GK
   const eligibleRanked = eligibleCoins
@@ -450,27 +604,48 @@ export const runWeek = async (options: RunWeekOptions = {}) => {
 
   // ==========================================
 
-  // Filter coins by their actual market cap rank, not array index
+  // Filter coins by market-cap rank buckets.
+  // IMPORTANT: Do not move coins across role buckets (DEF/MID/FWD).
+  // Each role must stay strictly inside its own rank window.
   const filterByRank = (coins: typeof eligibleWithPrice, startRank: number, endRank: number) =>
     coins.filter((c) => c.rank >= startRank && c.rank <= endRank);
 
+  const pools: Record<"GK" | "DEF" | "MID" | "FWD", typeof eligibleWithPrice> = {
+    GK: stablesRanked.slice(0, POSITION_RULES.GK.count),
+    DEF: filterByRank(eligibleWithPrice, POSITION_RULES.DEF.startRank, POSITION_RULES.DEF.endRank),
+    MID: filterByRank(eligibleWithPrice, POSITION_RULES.MID.startRank, POSITION_RULES.MID.endRank),
+    FWD: filterByRank(eligibleWithPrice, POSITION_RULES.FWD.startRank, POSITION_RULES.FWD.endRank),
+  };
+  // Hard minimums required to build at least one valid 11-slot strategy.
+  const hardMinByPosition: Record<"GK" | "DEF" | "MID" | "FWD", number> = {
+    GK: roleSlotCounts.GK,
+    DEF: roleSlotCounts.DEF,
+    MID: roleSlotCounts.MID,
+    FWD: roleSlotCounts.FWD,
+  };
+
+  for (const key of ["GK", "DEF", "MID", "FWD"] as const) {
+    pools[key].sort((a, b) => a.rank - b.rank);
+  }
+
+  const deficits = (["GK", "DEF", "MID", "FWD"] as const)
+    .map((position) => ({
+      position,
+      need: hardMinByPosition[position],
+      have: pools[position].length,
+    }))
+    .filter((row) => row.have < row.need);
+
+  if (deficits.length) {
+    const detail = deficits.map((row) => `${row.position}:${row.have}/${row.need}`).join(",");
+    throw new Error(`Week coin universe cannot satisfy minimum formation slots (${detail})`);
+  }
+
   const positions: { position: string; coins: typeof eligibleWithPrice }[] = [
-    {
-      position: "GK",
-      coins: stablesRanked.slice(0, POSITION_RULES.GK.count),
-    },
-    {
-      position: "DEF",
-      coins: filterByRank(eligibleWithPrice, POSITION_RULES.DEF.startRank, POSITION_RULES.DEF.endRank),
-    },
-    {
-      position: "MID",
-      coins: filterByRank(eligibleWithPrice, POSITION_RULES.MID.startRank, POSITION_RULES.MID.endRank),
-    },
-    {
-      position: "FWD",
-      coins: filterByRank(eligibleWithPrice, POSITION_RULES.FWD.startRank, POSITION_RULES.FWD.endRank),
-    },
+    { position: "GK", coins: pools.GK },
+    { position: "DEF", coins: pools.DEF },
+    { position: "MID", coins: pools.MID },
+    { position: "FWD", coins: pools.FWD },
   ];
 
   const positionTotals = Object.fromEntries(
@@ -485,7 +660,6 @@ export const runWeek = async (options: RunWeekOptions = {}) => {
       total: positionTotals[block.position] ?? block.coins.length,
     })),
   );
-
   const metricTargets = Array.from(
     new Map(targetCoins.map(({ coin }) => [coin.id, coin])).values(),
   ).map((coin) => ({ id: coin.id, symbol: coin.symbol }));
@@ -494,8 +668,15 @@ export const runWeek = async (options: RunWeekOptions = {}) => {
   let metricsByCoin = await computeSnapshotMetrics(metricTargets, geckoHeaders, { preferBinance: true });
   console.log("[run-week] metrics initial pass done");
   let missingMetricTargets = metricTargets.filter((coin) => !hasUsableMetric(metricsByCoin[coin.id]));
+  const maxRetryableMissing = 24;
 
-  for (let attempt = 2; attempt <= SNAPSHOT_METRICS_MAX_ATTEMPTS && missingMetricTargets.length; attempt += 1) {
+  for (
+    let attempt = 2;
+    attempt <= SNAPSHOT_METRICS_MAX_ATTEMPTS &&
+    missingMetricTargets.length > 0 &&
+    missingMetricTargets.length <= maxRetryableMissing;
+    attempt += 1
+  ) {
     console.log(`[run-week] metrics retry attempt=${attempt} missing=${missingMetricTargets.length}`);
     await sleep(SNAPSHOT_METRICS_RETRY_DELAY_MS * (attempt - 1));
     const retryMetrics = await computeSnapshotMetrics(missingMetricTargets, geckoHeaders, { preferBinance: true });
@@ -508,9 +689,22 @@ export const runWeek = async (options: RunWeekOptions = {}) => {
       .slice(0, 20)
       .map((coin) => coin.symbol)
       .join(",");
-    throw new Error(
-      `Snapshot metrics unresolved: ${missingMetricTargets.length}/${metricTargets.length} after ${SNAPSHOT_METRICS_MAX_ATTEMPTS} attempts. sample=${sample}`,
+    console.warn(
+      `[run-week] metrics fallback defaults count=${missingMetricTargets.length}/${metricTargets.length} sample=${sample}`,
     );
+    for (const missing of missingMetricTargets) {
+      metricsByCoin[missing.id] = {
+        power: 50,
+        risk: "Medium",
+        momentum: "Steady",
+        raw: {
+          rawPower: 0,
+          rawRisk: 0,
+          rawMomentum: 0,
+        },
+      };
+    }
+    missingMetricTargets = [];
   }
   const metricsUpdatedAt = new Date().toISOString();
   const powerWeightsByRole: Record<string, number[]> = {
@@ -564,6 +758,40 @@ export const runWeek = async (options: RunWeekOptions = {}) => {
     throw new Error(`Week coin count mismatch: expected=${targetCoins.length} actual=${weekCoins.length}`);
   }
 
+  if (scheduleCanSlide) {
+    const nowMs = Date.now();
+    const lockLeadSecondsRaw = Number(env.RUN_WEEK_MIN_LOCK_LEAD_SECONDS ?? "90");
+    const lockLeadSeconds = Number.isFinite(lockLeadSecondsRaw) && lockLeadSecondsRaw > 0
+      ? lockLeadSecondsRaw
+      : 90;
+    const minLockLeadMs = Math.floor(lockLeadSeconds * 1000);
+    const scheduleIsStale = lockAt.getTime() <= nowMs + minLockLeadMs;
+    if (scheduleIsStale) {
+      const previousWeekId = weekId;
+      const draftWindowMs = Math.floor(draftHoursForSchedule * 60 * 60 * 1000);
+      const effectiveLockLeadMs = Math.max(draftWindowMs, minLockLeadMs);
+      const nextLockAt = new Date(nowMs + effectiveLockLeadMs);
+      const nextStartAt = nextLockAt;
+      const nextEndAt = new Date(nextLockAt.getTime() + weekDaysForSchedule * 24 * 60 * 60 * 1000);
+      const nextWeekId = String(Math.floor(nextStartAt.getTime() / 1000));
+
+      weekId = nextWeekId;
+      startAt = nextStartAt;
+      lockAt = nextLockAt;
+      endAt = nextEndAt;
+
+      if (nextWeekId !== previousWeekId) {
+        for (const row of weekCoins) {
+          row.week_id = nextWeekId;
+        }
+      }
+
+      console.warn(
+        `[run-week] schedule shifted to future window oldWeekId=${previousWeekId} newWeekId=${nextWeekId} lockAt=${lockAt.toISOString()} minLeadMs=${minLockLeadMs}`
+      );
+    }
+  }
+
   if (refreshCurrentDraft) {
     if (isValcoreChainEnabled()) {
       const leagueAddress = await getRequiredLeagueAddress("refresh-week-coins");
@@ -594,6 +822,8 @@ export const runWeek = async (options: RunWeekOptions = {}) => {
   }
   const chainEnabled = isValcoreChainEnabled();
   const leagueAddress = chainEnabled ? await getRequiredLeagueAddress("run-week") : null;
+  const chainType = (await getRuntimeChainConfig()).chainType;
+  const isReactiveEvm = chainType === "evm" && String(process.env.AUTOMATION_MODE_EFFECTIVE ?? env.AUTOMATION_MODE ?? "").trim().toUpperCase() === "REACTIVE";
   const opKey = `week:${weekId}:create`;
   let intent = await ensureLifecycleIntent({
     opKey,
@@ -628,18 +858,70 @@ export const runWeek = async (options: RunWeekOptions = {}) => {
       });
     }
 
-    await updateWeekStatus(weekId, "DRAFT_OPEN");
-    console.log("[run-week] status moved to DRAFT_OPEN");
-    console.log(`run-week skipped: lifecycle intent already completed for week ${weekId}`);
-    return;
-  }
+    const existingWeek = await getWeekById(weekId);
+    const existingWeekCoins = await getWeekCoins(weekId);
+    const hasPreparedDraftState =
+      existingWeek !== null &&
+      String(existingWeek.status ?? "").toUpperCase() === "DRAFT_OPEN" &&
+      existingWeekCoins.length > 0;
 
+    if (hasPreparedDraftState) {
+      await updateWeekStatus(weekId, "DRAFT_OPEN");
+      console.log("[run-week] status moved to DRAFT_OPEN");
+      console.log(`run-week skipped: lifecycle intent already completed for week ${weekId}`);
+      return;
+    }
+
+    console.warn(
+      `[run-week] completed lifecycle intent found without full draft DB state for week ${weekId}; rebuilding`,
+    );
+  }
   console.log("[run-week] setWeekCoins start");
   await setWeekCoins(weekId, weekCoins);
   console.log("[run-week] setWeekCoins done");
   let txHash: string | null = intent.tx_hash ? String(intent.tx_hash).toLowerCase() : null;
+  let reactiveTxHash: string | null = isReactiveEvm ? txHash : null;
 
   try {
+    if (txHash && chainEnabled && leagueAddress && !isReactiveEvm) {
+      const onchainWeek = await getOnchainWeekState(leagueAddress, BigInt(weekId));
+      const onchainStatus = Number(onchainWeek.status ?? 0);
+      if (onchainStatus !== 1) {
+        throw new Error(
+          `DETERMINISTIC: stale create intent for week ${weekId}; tx=${txHash} but on-chain status=${onchainStatus}`,
+        );
+      }
+    }
+
+    if (isReactiveEvm && txHash && chainEnabled && leagueAddress) {
+      const onchainWeek = await getOnchainWeekState(leagueAddress, BigInt(weekId));
+      const onchainStatus = Number(onchainWeek.status ?? 0);
+      if (onchainStatus !== 1) {
+        const intentState = String((intent as { status?: unknown }).status ?? "").toLowerCase();
+        if ((intentState === "failed" || intentState === "error") && onchainStatus === 0) {
+          txHash = null;
+          reactiveTxHash = null;
+        }
+        const pendingSinceMs = getIntentUpdatedAtMs(intent as { updated_at?: unknown });
+        const reactiveStallGraceMs = Math.max(
+          15_000,
+          Number(env.REACTIVE_STALL_GRACE_SECONDS ?? "120") * 1000,
+        );
+        if (pendingSinceMs > 0 && Date.now() - pendingSinceMs > reactiveStallGraceMs && onchainStatus === 0) {
+          txHash = null;
+          reactiveTxHash = null;
+        }
+        if (!txHash) {
+          // stale failed tx hash cleared; allow fresh reactive dispatch below
+        } else {
+          console.log(
+            `[run-week] reactive callback pending for week ${weekId}; tx=${txHash}; current on-chain status=${onchainStatus}`,
+          );
+          return;
+        }
+      }
+    }
+
     if (!txHash && chainEnabled && leagueAddress) {
       console.log("[run-week] onchain create/check start");
       const onchainWeek = await getOnchainWeekState(leagueAddress, BigInt(weekId));
@@ -651,19 +933,44 @@ export const runWeek = async (options: RunWeekOptions = {}) => {
       const onchainLockAt = Number(onchainWeek.lockAt ?? 0n);
       const onchainEndAt = Number(onchainWeek.endAt ?? 0n);
       if (onchainStatus === 0) {
-        const createdTxHash = await createWeekOnchain(
-          leagueAddress,
-          BigInt(weekId),
-          expectedStartAt,
-          expectedLockAt,
-          expectedEndAt,
-        );
-        txHash = createdTxHash;
-        intent =
-          (await markLifecycleIntentSubmitted(intent, createdTxHash, {
-            txHash: createdTxHash,
-            chainExecuted: true,
-          })) ?? intent;
+        try {
+          const createdTxHash = await createWeekOnchain(
+            leagueAddress,
+            BigInt(weekId),
+            expectedStartAt,
+            expectedLockAt,
+            expectedEndAt,
+            opKey,
+          );
+          txHash = createdTxHash;
+          if (isReactiveEvm) reactiveTxHash = createdTxHash;
+          intent =
+            (await markLifecycleIntentSubmitted(intent, createdTxHash, {
+              txHash: createdTxHash,
+              chainExecuted: true,
+              reactiveTxHash,
+              submittedAtMs: Date.now(),
+            })) ?? intent;
+        } catch (error) {
+          const dispatchedReactiveTx = extractReactiveTxHash(error);
+          if (isReactiveEvm && dispatchedReactiveTx) {
+            txHash = dispatchedReactiveTx;
+            reactiveTxHash = dispatchedReactiveTx;
+            intent =
+              (await markLifecycleIntentSubmitted(intent, dispatchedReactiveTx, {
+                txHash: dispatchedReactiveTx,
+                chainExecuted: true,
+                reactiveTxHash,
+                submittedAtMs: Date.now(),
+                pendingConfirmation: true,
+              })) ?? intent;
+            console.log(
+              `[run-week] reactive create submitted tx=${dispatchedReactiveTx}; waiting callback confirmation`,
+            );
+            return;
+          }
+          throw error;
+        }
       } else if (
         onchainStatus === 1 &&
         onchainStartAt === expectedStartAt &&
@@ -679,6 +986,16 @@ export const runWeek = async (options: RunWeekOptions = {}) => {
     }
 
     if (chainEnabled && leagueAddress) {
+      if (isReactiveEvm && txHash) {
+        const onchainWeek = await getOnchainWeekState(leagueAddress, BigInt(weekId));
+        const onchainStatus = Number(onchainWeek.status ?? 0);
+        if (onchainStatus !== 1) {
+          console.log(
+            `[run-week] reactive callback pending for week ${weekId}; current on-chain status=${onchainStatus}`,
+          );
+          return;
+        }
+      }
       console.log("[run-week] onchain draft assertion start");
       await assertOnchainDraftWeek({
         leagueAddress,
@@ -697,16 +1014,27 @@ export const runWeek = async (options: RunWeekOptions = {}) => {
       txHash,
       status: "DRAFT_OPEN",
       chainExecuted: Boolean(txHash),
+      reactiveTxHash,
       startAt: startAt.toISOString(),
       lockAt: lockAt.toISOString(),
       endAt: endAt.toISOString(),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const extractedReactiveTxHash =
+      typeof error === "object" && error !== null
+        ? String((error as { reactiveTxHash?: unknown }).reactiveTxHash ?? "").trim().toLowerCase()
+        : "";
+    if (isReactiveEvm && !reactiveTxHash) {
+      if (/^0x[0-9a-f]{64}$/u.test(extractedReactiveTxHash)) {
+        reactiveTxHash = extractedReactiveTxHash;
+      }
+    }
     await markLifecycleIntentFailed(intent, message, {
       txHash,
       status: "PREPARING",
       chainExecuted: Boolean(txHash),
+      reactiveTxHash,
       startAt: startAt.toISOString(),
       lockAt: lockAt.toISOString(),
       endAt: endAt.toISOString(),
@@ -716,19 +1044,7 @@ export const runWeek = async (options: RunWeekOptions = {}) => {
 
 };
 
-const isDirectRun = (() => {
-  try {
-    if (!process.argv[1]) return false;
-    return import.meta.url === pathToFileURL(process.argv[1]).href;
-  } catch {
-    return false;
-  }
-})();
 
-if (isDirectRun) {
-  runWeek().catch((error) => {
-    console.error("run-week failed", error);
-    process.exit(1);
-  });
-}
+
+
 
