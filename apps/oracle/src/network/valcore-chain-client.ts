@@ -1,11 +1,7 @@
 import { ethers } from "ethers";
 import { env } from "../env.js";
 import {
-  getRuntimeChainType,
   getRuntimeProvider,
-  getRuntimeStarknetProviderUrls,
-  withRuntimeStarknetProvider,
-  getRequiredRuntimeStarknetAccount,
   getRequiredRuntimeOraclePrivateKey,
   getRequiredRuntimeAuditorPrivateKey,
   getRequiredRuntimeContractAdminPrivateKey,
@@ -36,69 +32,36 @@ export type ChainPositionState = {
 };
 
 type EvmRole = "oracle" | "auditor" | "contract_admin" | "pauser" | "faucet_minter";
-type StarkRole = EvmRole;
 
-const MAX_ATTEMPTS = (() => {
-  const parsed = Number(env.CHAIN_TX_MAX_ATTEMPTS);
-  if (!Number.isInteger(parsed) || parsed <= 0) return 4;
-  return parsed;
-})();
+const REACTIVE_ACTION_LOCK = 2;
+const REACTIVE_ACTION_START = 3;
+const REACTIVE_EXECUTED_TOPIC0 = ethers.id("ReactiveLifecycleExecuted(bytes32,uint8,uint256)");
 
-const BASE_DELAY_MS = (() => {
-  const parsed = Number(env.CHAIN_TX_RETRY_BASE_MS);
-  if (!Number.isInteger(parsed) || parsed <= 0) return 1500;
-  return parsed;
-})();
-
-const sleep = (ms: number) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
-
-const TX_WAIT_TIMEOUT_MS = (() => {
-  const parsed = Number(process.env.CHAIN_TX_WAIT_TIMEOUT_MS ?? "90000");
-  if (!Number.isFinite(parsed) || parsed <= 0) return 90000;
-  return Math.trunc(parsed);
-})();
-
-const CHAIN_READ_TIMEOUT_MS = (() => {
-  const parsed = Number(process.env.CHAIN_READ_TIMEOUT_MS ?? "10000");
-  if (!Number.isFinite(parsed) || parsed <= 0) return 10000;
-  return Math.trunc(parsed);
-})();
-
-const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> => {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-};
-
-const isRetryable = (error: unknown) => {
-  const text = (error instanceof Error ? error.message : String(error ?? "")).toLowerCase();
-  const hints = [
-    "timeout",
-    "timed out",
-    "temporarily",
-    "rate",
-    "429",
-    "502",
-    "503",
-    "504",
-    "gateway",
-    "nonce",
-    "rejected",
-    "unexpected token '<'",
-    "no available nodes found",
-    "<!doctype",
-    "<html",
-  ];
-  return hints.some((hint) => text.includes(hint));
-};
+const REACTIVE_DISPATCHER_ABI = [
+  "function dispatch(bytes payload,uint64 gasLimit)",
+  "function coverDebt() payable",
+  "function destinationChainId() view returns (uint256)",
+  "function destinationReceiver() view returns (address)",
+  "function operator() view returns (address)",
+] as const;
+const REACTIVE_RECEIVER_ABI = [
+  "function rxCreateWeek(address,bytes32,uint256,uint64,uint64,uint64)",
+  "function rxTransition(address,bytes32,uint8,uint256,bool)",
+  "function rxFinalize(address,bytes32,uint256,bytes32,bytes32,uint256,bool)",
+  "function rxApprove(address,bytes32,uint256)",
+  "function rxReject(address,bytes32,uint256)",
+  "function coverDebt()",
+] as const;
+const REACTIVE_RECEIVER_VIEW_ABI = [
+  "function reactiveSender() view returns (address)",
+] as const;
+const REACTIVE_CALLBACK_PROXY_ABI = [
+  "function debt(address) view returns (uint256)",
+] as const;
+const REACTIVE_SYSTEM_ABI = [
+  "function debt(address) view returns (uint256)",
+] as const;
+const REACTIVE_SYSTEM_ADDRESS = "0x0000000000000000000000000000000000fffFfF";
 
 const normalizeHex = (value: unknown) => {
   const raw = String(value ?? "").trim();
@@ -106,16 +69,6 @@ const normalizeHex = (value: unknown) => {
   if (raw.startsWith("0x") || raw.startsWith("0X")) return raw.toLowerCase();
   return `0x${BigInt(raw).toString(16)}`;
 };
-
-const normalizeHashForStarknetFelt = (value: string) => {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  if (!/^0x[0-9a-f]+$/u.test(normalized)) {
-    throw new Error("Invalid Starknet felt hash: " + String(value ?? ""));
-  }
-  const starknetFieldPrime = BigInt("0x800000000000011000000000000000000000000000000000000000000000001");
-  return ethers.toBeHex(BigInt(normalized) % starknetFieldPrime, 32).toLowerCase();
-};
-
 
 const asBigInt = (value: unknown): bigint => {
   if (typeof value === "bigint") return value;
@@ -125,163 +78,23 @@ const asBigInt = (value: unknown): bigint => {
     if (!normalized) return 0n;
     return BigInt(normalized);
   }
-  if (value && typeof value === "object") {
-    const maybe = value as { low?: unknown; high?: unknown };
-    if (maybe.low !== undefined || maybe.high !== undefined) {
-      const low = asBigInt(maybe.low ?? 0);
-      const high = asBigInt(maybe.high ?? 0);
-      return (high << 128n) + low;
-    }
-  }
   return 0n;
 };
 
-const asBool = (value: unknown) => asBigInt(value) !== 0n;
 const asNumber = (value: unknown) => Number(asBigInt(value));
 
-const toU256 = (value: bigint) => {
-  if (value < 0n) throw new Error("Negative value is not valid for u256");
-  const lowMask = (1n << 128n) - 1n;
-  const low = value & lowMask;
-  const high = value >> 128n;
-  return {
-    low: `0x${low.toString(16)}`,
-    high: `0x${high.toString(16)}`,
-  };
+const normalizeAddress = (value: string, label: string) => {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) {
+    throw new Error(`${label} is not configured`);
+  }
+  return ethers.getAddress(normalized);
 };
 
-const toStarknetCalldataHex = (value: unknown): string => {
-  if (typeof value === "string") {
-    const raw = value.trim();
-    if (!raw) return "0x0";
-    if (/^0x[0-9a-f]+$/iu.test(raw)) return raw.toLowerCase();
-    return `0x${BigInt(raw).toString(16)}`;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) return "0x0";
-    return `0x${BigInt(Math.trunc(value)).toString(16)}`;
-  }
-  if (typeof value === "bigint") {
-    return `0x${value.toString(16)}`;
-  }
-  if (value && typeof value === "object") {
-    const record = value as { low?: unknown; high?: unknown };
-    if (record.low !== undefined || record.high !== undefined) {
-      return [toStarknetCalldataHex(record.low ?? 0), toStarknetCalldataHex(record.high ?? 0)].join(",");
-    }
-  }
-  return "0x0";
-};
-
-const flattenStarknetCalldata = (items: unknown[]): string[] => {
-  const output: string[] = [];
-  for (const item of items) {
-    if (item && typeof item === "object" && !Array.isArray(item)) {
-      const record = item as Record<string, unknown>;
-      if (record.low !== undefined || record.high !== undefined) {
-        output.push(toStarknetCalldataHex(record.low ?? 0));
-        output.push(toStarknetCalldataHex(record.high ?? 0));
-        continue;
-      }
-    }
-    output.push(toStarknetCalldataHex(item));
-  }
-  return output;
-};
-
-const callStarknetContractRaw = async (
-  provider: {
-    callContract: (request: {
-      contractAddress: string;
-      entrypoint: string;
-      calldata: string[];
-    }) => Promise<unknown>;
-  },
-  contractAddress: string,
-  entrypoint: string,
-  calldata: unknown[],
-): Promise<string[]> => {
-  const raw = await provider.callContract({
-    contractAddress,
-    entrypoint,
-    calldata: flattenStarknetCalldata(calldata),
-  });
-  if (Array.isArray(raw)) {
-    return raw.map((item) => String(item));
-  }
-  const result = (raw as { result?: unknown[] } | null | undefined)?.result;
-  if (Array.isArray(result)) {
-    return result.map((item) => String(item));
-  }
-  return [];
-};
-const waitForStarknetTx = async (provider: { waitForTransaction: (tx: string) => Promise<unknown> }, transactionHash: string) => {
-  const receipt = await withTimeout(
-    provider.waitForTransaction(transactionHash),
-    TX_WAIT_TIMEOUT_MS,
-    `waitForTransaction(${transactionHash})`,
-  );
-
-  const statusText = String((receipt as { execution_status?: string }).execution_status ?? "").toUpperCase();
-  if (statusText && statusText !== "SUCCEEDED") {
-    throw new Error(`Starknet tx execution failed: ${statusText}`);
-  }
-  return receipt;
-};
-
-const getEvmPrivateKeyByRole = async (role: EvmRole): Promise<string> => {
-  if (role === "oracle") return getRequiredRuntimeOraclePrivateKey();
-  if (role === "auditor") return getRequiredRuntimeAuditorPrivateKey();
-  if (role === "contract_admin") return getRequiredRuntimeContractAdminPrivateKey();
-  if (role === "pauser") return getRequiredRuntimePauserPrivateKey();
-  return getRequiredRuntimeFaucetMinterPrivateKey();
-};
-
-const sendStarknetInvoke = async (
-  role: StarkRole,
-  contractAddress: string,
-  fnName: string,
-  calldata: unknown[],
-  label: string,
-  _abiOverride?: unknown[],
-): Promise<string> => {
-  const rpcUrls = await getRuntimeStarknetProviderUrls();
-  const flatCalldata = flattenStarknetCalldata(calldata);
-
-  let lastError: unknown = null;
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    for (const rpcUrl of rpcUrls) {
-      try {
-        const account = await getRequiredRuntimeStarknetAccount(role, rpcUrl);
-        const response = await (account as any).execute([
-          {
-            contractAddress,
-            entrypoint: fnName,
-            calldata: flatCalldata,
-          },
-        ]);
-        const txHash = String((response as { transaction_hash?: string }).transaction_hash ?? "").toLowerCase();
-        if (!txHash) {
-          throw new Error(label + ": missing transaction hash");
-        }
-        await waitForStarknetTx(((account as any).provider ?? (account as any)) as any, txHash);
-        return txHash;
-      } catch (error) {
-        lastError = error;
-        if (!isRetryable(error)) {
-          const message = error instanceof Error ? error.message : String(error);
-          throw new Error(label + " failed: " + message);
-        }
-      }
-    }
-
-    if (attempt < MAX_ATTEMPTS) {
-      await sleep(BASE_DELAY_MS * attempt);
-    }
-  }
-
-  const message = lastError instanceof Error ? lastError.message : String(lastError);
-  throw new Error(label + " failed after " + String(MAX_ATTEMPTS) + " attempt(s): " + message);
+const toPositiveIntEnv = (value: string | undefined, fallback: number) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.floor(parsed);
 };
 
 const FUNDING_PENDING_PREFIX = "FUNDING_PENDING";
@@ -304,6 +117,21 @@ const CHAIN_GAS_BANK_TOPUP_WEI = parseEthEnvToWei(
   env.CHAIN_GAS_BANK_TOPUP_ETH,
   "0.3",
   "CHAIN_GAS_BANK_TOPUP_ETH",
+);
+const REACTIVE_EXECUTOR_MIN_BALANCE_WEI = parseEthEnvToWei(
+  env.REACTIVE_EXECUTOR_MIN_BALANCE_ETH,
+  "0.03",
+  "REACTIVE_EXECUTOR_MIN_BALANCE_ETH",
+);
+const REACTIVE_GAS_BANK_TOPUP_WEI = parseEthEnvToWei(
+  env.REACTIVE_GAS_BANK_TOPUP_ETH,
+  "3",
+  "REACTIVE_GAS_BANK_TOPUP_ETH",
+);
+const REACTIVE_RECEIVER_DEBT_BUFFER_WEI = parseEthEnvToWei(
+  (env as any).REACTIVE_RECEIVER_DEBT_BUFFER_ETH ?? env.REACTIVE_DISPATCHER_DEBT_BUFFER_ETH,
+  "0.02",
+  "REACTIVE_RECEIVER_DEBT_BUFFER_ETH",
 );
 
 const ensureWalletFundedByBank = async ({
@@ -370,252 +198,12 @@ const ensureWalletFundedByBank = async ({
   }
 };
 
-const sendEvmChainTx = async (
-  role: EvmRole,
-  contractAddress: string,
-  abi: readonly string[],
-  label: string,
-  sender: (contract: ethers.Contract, overrides: Record<string, bigint>) => Promise<unknown>,
-): Promise<string> => {
-  const provider = await getRuntimeProvider();
-  const privateKey = await getEvmPrivateKeyByRole(role);
-  const wallet = new ethers.Wallet(privateKey, provider);
-  const contract = new ethers.Contract(contractAddress, abi, wallet);
-
-  await ensureWalletFundedByBank({
-    provider,
-    targetAddress: wallet.address,
-    targetLabel: `${label} signer ${wallet.address}`,
-    minBalanceWei: CHAIN_GAS_MIN_BALANCE_WEI,
-    topupWei: CHAIN_GAS_BANK_TOPUP_WEI,
-    bankPrivateKey: env.CHAIN_GAS_BANK_PRIVATE_KEY,
-    bankLabel: "CHAIN_GAS_BANK_PRIVATE_KEY",
-  });
-
-  let sent: Awaited<ReturnType<typeof sendTxWithPolicy>>;
-  try {
-    sent = await sendTxWithPolicy({
-      label,
-      signer: wallet,
-      send: (overrides) =>
-        sender(
-          contract,
-          overrides,
-        ) as Promise<{ hash: string; wait: (confirmations?: number) => Promise<ethers.TransactionReceipt | null> }>,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error ?? "");
-    if (message.toLowerCase().includes("insufficient funds")) {
-      throw new Error(`${FUNDING_PENDING_PREFIX}: ${label} signer has insufficient funds. ${message}`);
-    }
-    throw error;
-  }
-
-  return sent.txHash;
-};
-
-const parseWeekStateFromStarknet = (raw: unknown): ChainWeekState => {
-  const value = (raw ?? {}) as Record<string, unknown>;
-  const arr = Array.isArray(raw) ? raw : [];
-  return {
-    startAt: asBigInt(value.start_at ?? arr[0]),
-    lockAt: asBigInt(value.lock_at ?? arr[1]),
-    endAt: asBigInt(value.end_at ?? arr[2]),
-    finalizedAt: asBigInt(value.finalized_at ?? arr[3]),
-    status: asNumber(value.status ?? arr[4]),
-    riskCommitted: asBigInt(value.risk_committed ?? arr[5]),
-    retainedFee: asBigInt(value.retained_fee ?? arr[6]),
-    merkleRoot: normalizeHex(value.merkle_root ?? arr[7]),
-    metadataHash: normalizeHex(value.metadata_hash ?? arr[8]),
-  };
-};
-
-const parsePositionFromStarknet = (raw: unknown): ChainPositionState => {
-  const value = (raw ?? {}) as Record<string, unknown>;
-  const arr = Array.isArray(raw) ? raw : [];
-  return {
-    principal: asBigInt(value.principal ?? arr[0]),
-    risk: asBigInt(value.risk ?? arr[1]),
-    forfeitedReward: asBigInt(value.forfeited_reward ?? arr[2]),
-    lineupHash: normalizeHex(value.lineup_hash ?? arr[3]),
-    swaps: asNumber(value.swaps ?? arr[4]),
-    claimed: asBool(value.claimed ?? arr[5]),
-  };
-};
-
-export const getOnchainFeeBps = async (leagueAddress: string): Promise<number> => {
-  const chainType = await getRuntimeChainType();
-  if (chainType === "starknet") {
-    return withRuntimeStarknetProvider(async (provider) => {
-      const raw = await callStarknetContractRaw(provider as any, leagueAddress, "fee_bps", []);
-      return asNumber(raw[0] ?? 0);
-    });
-  }
-
-  const provider = await getRuntimeProvider();
-  const league = new ethers.Contract(leagueAddress, ["function feeBps() view returns (uint16)"], provider);
-  return Number(await withTimeout(league.feeBps(), CHAIN_READ_TIMEOUT_MS, "feeBps()"));
-};
-
-export const getOnchainWeekState = async (leagueAddress: string, weekId: bigint): Promise<ChainWeekState> => {
-  const chainType = await getRuntimeChainType();
-  if (chainType === "starknet") {
-    return withRuntimeStarknetProvider(async (provider) => {
-      const raw = await callStarknetContractRaw(provider as any, leagueAddress, "get_week_state", [weekId]);
-      return parseWeekStateFromStarknet(raw);
-    });
-  }
-
-  const provider = await getRuntimeProvider();
-  const league = new ethers.Contract(
-    leagueAddress,
-    [
-      "function weekStates(uint256) view returns (uint64,uint64,uint64,uint64,uint8,uint128,uint128,bytes32,bytes32)",
-    ],
-    provider,
-  );
-  const state = await withTimeout(
-    league.weekStates(weekId),
-    CHAIN_READ_TIMEOUT_MS,
-    `weekStates(${weekId.toString()})`,
-  );
-  return {
-    startAt: asBigInt(state[0]),
-    lockAt: asBigInt(state[1]),
-    endAt: asBigInt(state[2]),
-    finalizedAt: asBigInt(state[3]),
-    status: asNumber(state[4]),
-    riskCommitted: asBigInt(state[5]),
-    retainedFee: asBigInt(state[6]),
-    merkleRoot: normalizeHex(state[7]),
-    metadataHash: normalizeHex(state[8]),
-  };
-};
-
-export const getOnchainPosition = async (
-  leagueAddress: string,
-  weekId: bigint,
-  address: string,
-): Promise<ChainPositionState> => {
-  const chainType = await getRuntimeChainType();
-  if (chainType === "starknet") {
-    return withRuntimeStarknetProvider(async (provider) => {
-      const raw = await callStarknetContractRaw(provider as any, leagueAddress, "get_position", [weekId, address]);
-      return parsePositionFromStarknet(raw);
-    });
-  }
-
-  const provider = await getRuntimeProvider();
-  const league = new ethers.Contract(
-    leagueAddress,
-    [
-      "function positions(uint256,address) view returns (uint128 principal,uint128 risk,uint128 forfeitedReward,bytes32 lineupHash,uint8 swaps,bool claimed)",
-    ],
-    provider,
-  );
-  const state = await withTimeout(
-    league.positions(weekId, address),
-    CHAIN_READ_TIMEOUT_MS,
-    `positions(${weekId.toString()},${address})`,
-  );
-  return {
-    principal: asBigInt(state.principal ?? state[0]),
-    risk: asBigInt(state.risk ?? state[1]),
-    forfeitedReward: asBigInt(state.forfeitedReward ?? state[2]),
-    lineupHash: normalizeHex(state.lineupHash ?? state[3]),
-    swaps: asNumber(state.swaps ?? state[4]),
-    claimed: Boolean(state.claimed ?? state[5]),
-  };
-};
-
-export const getOnchainTestMode = async (leagueAddress: string): Promise<boolean> => {
-  const chainType = await getRuntimeChainType();
-  if (chainType === "starknet") {
-    return withRuntimeStarknetProvider(async (provider) => {
-      const raw = await callStarknetContractRaw(provider as any, leagueAddress, "test_mode", []);
-      return asBool(raw[0] ?? 0);
-    });
-  }
-
-  const provider = await getRuntimeProvider();
-  const league = new ethers.Contract(leagueAddress, ["function testMode() view returns (bool)"], provider);
-  return Boolean(await withTimeout(league.testMode(), CHAIN_READ_TIMEOUT_MS, "testMode()"));
-};
-
-export const getOnchainPaused = async (leagueAddress: string): Promise<boolean> => {
-  const chainType = await getRuntimeChainType();
-  if (chainType === "starknet") {
-    return withRuntimeStarknetProvider(async (provider) => {
-      const raw = await callStarknetContractRaw(provider as any, leagueAddress, "paused", []);
-      return asBool(raw[0] ?? 0);
-    });
-  }
-
-  const provider = await getRuntimeProvider();
-  const league = new ethers.Contract(leagueAddress, ["function paused() view returns (bool)"], provider);
-  return Boolean(await withTimeout(league.paused(), CHAIN_READ_TIMEOUT_MS, "paused()"));
-};
-
-const requireLifecycleIntentOpKey = (value: string | undefined, label: string) => {
+const resolveLifecycleIntentOpKey = (value: string | undefined, fallback: string) => {
   const normalized = String(value ?? "").trim();
-  if (!normalized) {
-    throw new Error(`${label}: lifecycle intent opKey is required`);
-  }
-  return normalized;
+  return normalized || fallback;
 };
 
 const toIntentId = (opKey: string) => ethers.id(opKey);
-const REACTIVE_ACTION_LOCK = 2;
-const REACTIVE_ACTION_START = 3;
-
-const REACTIVE_EXECUTED_TOPIC0 = ethers.id("ReactiveLifecycleExecuted(bytes32,uint8,uint256)");
-
-const REACTIVE_DISPATCHER_ABI = [
-  "function dispatch(bytes payload,uint64 gasLimit)",
-  "function coverDebt() payable",
-  "function destinationChainId() view returns (uint256)",
-  "function destinationReceiver() view returns (address)",
-  "function operator() view returns (address)",
-] as const;
-const REACTIVE_RECEIVER_ABI = [
-  "function rxCreateWeek(address,bytes32,uint256,uint64,uint64,uint64)",
-  "function rxTransition(address,bytes32,uint8,uint256,bool)",
-  "function rxFinalize(address,bytes32,uint256,bytes32,bytes32,uint256,bool)",
-  "function rxApprove(address,bytes32,uint256)",
-  "function rxReject(address,bytes32,uint256)",
-] as const;
-const REACTIVE_RECEIVER_VIEW_ABI = [
-  "function reactiveSender() view returns (address)",
-] as const;
-const REACTIVE_SYSTEM_ABI = [
-  "function debt(address) view returns (uint256)",
-] as const;
-const REACTIVE_SYSTEM_ADDRESS = "0x0000000000000000000000000000000000fffFfF";
-
-const toPositiveIntEnv = (value: string | undefined, fallback: number) => {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
-  return Math.floor(parsed);
-};
-
-const normalizeAddress = (value: string, label: string) => {
-  const normalized = String(value ?? "").trim();
-  if (!normalized) {
-    throw new Error(`${label} is not configured`);
-  }
-  return ethers.getAddress(normalized);
-};
-
-const REACTIVE_EXECUTOR_MIN_BALANCE_WEI = parseEthEnvToWei(
-  env.REACTIVE_EXECUTOR_MIN_BALANCE_ETH,
-  "0.03",
-  "REACTIVE_EXECUTOR_MIN_BALANCE_ETH",
-);
-const REACTIVE_GAS_BANK_TOPUP_WEI = parseEthEnvToWei(
-  env.REACTIVE_GAS_BANK_TOPUP_ETH,
-  "3",
-  "REACTIVE_GAS_BANK_TOPUP_ETH",
-);
 
 type ReactiveTransportConfig = {
   rpcUrl: string;
@@ -655,8 +243,6 @@ const withRetry = async <T>(
 };
 
 const getReactiveTransportConfig = async (): Promise<ReactiveTransportConfig | null> => {
-  const chainType = await getRuntimeChainType();
-  if (chainType !== "evm") return null;
   const mode = String(process.env.AUTOMATION_MODE_EFFECTIVE ?? env.AUTOMATION_MODE ?? "").trim().toUpperCase();
   if (mode !== "REACTIVE") return null;
 
@@ -704,11 +290,11 @@ const ensureReactiveDispatcherPreflight = async (config: ReactiveTransportConfig
   const preflightRetryDelayMs = Math.max(250, toPositiveIntEnv(process.env.REACTIVE_PREFLIGHT_RETRY_DELAY_MS, 1200));
   const preflightTxWaitMs = Math.max(
     preflightTimeoutMs,
-    toPositiveIntEnv(process.env.REACTIVE_PREFLIGHT_TX_WAIT_MS, TX_WAIT_TIMEOUT_MS),
+    toPositiveIntEnv(process.env.REACTIVE_PREFLIGHT_TX_WAIT_MS, 180000),
   );
+  const destinationProvider = await getRuntimeProvider();
 
   if (!cachedStaticPreflight) {
-    const destinationProvider = await getRuntimeProvider();
     const destinationNetwork = await withTimeout(
       destinationProvider.getNetwork(),
       preflightTimeoutMs,
@@ -905,6 +491,90 @@ const ensureReactiveDispatcherPreflight = async (config: ReactiveTransportConfig
     }
   }
 
+  const callbackProxyAddress = normalizeAddress(
+    String(env.REACTIVE_CALLBACK_PROXY_ADDRESS ?? "").trim(),
+    "REACTIVE_CALLBACK_PROXY_ADDRESS",
+  );
+  const callbackProxy = new ethers.Contract(callbackProxyAddress, REACTIVE_CALLBACK_PROXY_ABI, destinationProvider);
+
+  let [receiverDebt, receiverBalance] = await withRetry(
+    () =>
+      Promise.all([
+        withTimeout(
+          callbackProxy.debt(config.receiverAddress),
+          preflightTimeoutMs,
+          "reactive preflight: callbackProxy.debt(receiver)",
+        ),
+        withTimeout(
+          destinationProvider.getBalance(config.receiverAddress),
+          preflightTimeoutMs,
+          "reactive preflight: receiver balance",
+        ),
+      ]),
+    preflightRetryAttempts,
+    preflightRetryDelayMs,
+    "reactive preflight: receiver debt reads",
+  );
+
+  const requiredReceiverBalance = receiverDebt + REACTIVE_RECEIVER_DEBT_BUFFER_WEI;
+  if (receiverBalance < requiredReceiverBalance) {
+    await ensureWalletFundedByBank({
+      provider: destinationProvider,
+      targetAddress: config.receiverAddress,
+      targetLabel: `reactive receiver ${config.receiverAddress}`,
+      minBalanceWei: requiredReceiverBalance,
+      topupWei: CHAIN_GAS_BANK_TOPUP_WEI,
+      bankPrivateKey: env.CHAIN_GAS_BANK_PRIVATE_KEY,
+      bankLabel: "CHAIN_GAS_BANK_PRIVATE_KEY",
+    });
+    receiverBalance = await withTimeout(
+      destinationProvider.getBalance(config.receiverAddress),
+      preflightTimeoutMs,
+      "reactive preflight: receiver balance post-topup",
+    );
+    if (receiverBalance < requiredReceiverBalance) {
+      throw new Error(
+        `${FUNDING_PENDING_PREFIX}: reactive receiver still underfunded after top-up. receiver=${config.receiverAddress} balance=${ethers.formatEther(
+          receiverBalance,
+        )} required=${ethers.formatEther(requiredReceiverBalance)}`,
+      );
+    }
+  }
+
+  if (receiverDebt > 0n) {
+    const debtSettlerPk = String(env.CHAIN_GAS_BANK_PRIVATE_KEY ?? "").trim() || await getRequiredRuntimeOraclePrivateKey();
+    const debtSettler = new ethers.Wallet(debtSettlerPk, destinationProvider);
+    const receiverWithSettler = new ethers.Contract(config.receiverAddress, REACTIVE_RECEIVER_ABI, debtSettler);
+    const coverTx = (await withTimeout(
+      (receiverWithSettler as any).coverDebt(),
+      preflightTimeoutMs,
+      "reactive preflight: receiver coverDebt send",
+    )) as { wait: () => Promise<unknown> };
+    await withTimeout(
+      coverTx.wait(),
+      preflightTxWaitMs,
+      "reactive preflight: receiver coverDebt confirmation",
+    );
+
+    receiverDebt = await withRetry(
+      () =>
+        withTimeout(
+          callbackProxy.debt(config.receiverAddress),
+          preflightTimeoutMs,
+          "reactive preflight: callbackProxy.debt(receiver) post-cover",
+        ),
+      preflightRetryAttempts,
+      preflightRetryDelayMs,
+      "reactive preflight: receiver debt read post-cover",
+    );
+
+    if (receiverDebt > 0n) {
+      throw new Error(
+        `Reactive receiver debt remains after coverDebt: receiver=${config.receiverAddress} debt=${ethers.formatEther(receiverDebt)}`,
+      );
+    }
+  }
+
 };
 
 const getReactiveSenderForPayload = async (config: ReactiveTransportConfig): Promise<string> => {
@@ -913,6 +583,20 @@ const getReactiveSenderForPayload = async (config: ReactiveTransportConfig): Pro
     throw new Error("Reactive dispatcher sender mapping is unavailable");
   }
   return ethers.getAddress(reactiveDispatcherResolvedSender);
+};
+
+const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 };
 
 const REACTIVE_DESTINATION_READ_TIMEOUT_MS = Math.max(
@@ -1046,6 +730,149 @@ const dispatchReactiveCallback = async (
   }
 };
 
+const getEvmPrivateKeyByRole = async (role: EvmRole): Promise<string> => {
+  if (role === "oracle") return getRequiredRuntimeOraclePrivateKey();
+  if (role === "auditor") return getRequiredRuntimeAuditorPrivateKey();
+  if (role === "contract_admin") return getRequiredRuntimeContractAdminPrivateKey();
+  if (role === "pauser") return getRequiredRuntimePauserPrivateKey();
+  return getRequiredRuntimeFaucetMinterPrivateKey();
+};
+
+const sendEvmChainTx = async (
+  role: EvmRole,
+  contractAddress: string,
+  abi: readonly string[],
+  label: string,
+  sender: (contract: ethers.Contract, overrides: Record<string, bigint>) => Promise<unknown>,
+): Promise<string> => {
+  const provider = await getRuntimeProvider();
+  const privateKey = await getEvmPrivateKeyByRole(role);
+  const wallet = new ethers.Wallet(privateKey, provider);
+  const contract = new ethers.Contract(contractAddress, abi, wallet);
+
+  await ensureWalletFundedByBank({
+    provider,
+    targetAddress: wallet.address,
+    targetLabel: `${label} signer ${wallet.address}`,
+    minBalanceWei: CHAIN_GAS_MIN_BALANCE_WEI,
+    topupWei: CHAIN_GAS_BANK_TOPUP_WEI,
+    bankPrivateKey: env.CHAIN_GAS_BANK_PRIVATE_KEY,
+    bankLabel: "CHAIN_GAS_BANK_PRIVATE_KEY",
+  });
+
+  let sent: Awaited<ReturnType<typeof sendTxWithPolicy>>;
+  try {
+    sent = await sendTxWithPolicy({
+      label,
+      signer: wallet,
+      send: (overrides) =>
+        sender(
+          contract,
+          overrides,
+        ) as Promise<{ hash: string; wait: (confirmations?: number) => Promise<ethers.TransactionReceipt | null> }>,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error ?? "");
+    if (message.toLowerCase().includes("insufficient funds")) {
+      throw new Error(`${FUNDING_PENDING_PREFIX}: ${label} signer has insufficient funds. ${message}`);
+    }
+    throw error;
+  }
+
+  return sent.txHash;
+};
+
+export const getOnchainFeeBps = async (leagueAddress: string): Promise<number> => {
+  const provider = await getRuntimeProvider();
+  const league = new ethers.Contract(leagueAddress, ["function feeBps() view returns (uint16)"], provider);
+  return Number(
+    await withTimeout(
+      league.feeBps(),
+      REACTIVE_DESTINATION_READ_TIMEOUT_MS,
+      "feeBps()",
+    ),
+  );
+};
+
+export const getOnchainWeekState = async (leagueAddress: string, weekId: bigint): Promise<ChainWeekState> => {
+  const provider = await getRuntimeProvider();
+  const league = new ethers.Contract(
+    leagueAddress,
+    [
+      "function weekStates(uint256) view returns (uint64,uint64,uint64,uint64,uint8,uint128,uint128,bytes32,bytes32)",
+    ],
+    provider,
+  );
+  const state = await withTimeout(
+    league.weekStates(weekId),
+    REACTIVE_DESTINATION_READ_TIMEOUT_MS,
+    `weekStates(${weekId.toString()})`,
+  );
+  return {
+    startAt: asBigInt(state[0]),
+    lockAt: asBigInt(state[1]),
+    endAt: asBigInt(state[2]),
+    finalizedAt: asBigInt(state[3]),
+    status: asNumber(state[4]),
+    riskCommitted: asBigInt(state[5]),
+    retainedFee: asBigInt(state[6]),
+    merkleRoot: normalizeHex(state[7]),
+    metadataHash: normalizeHex(state[8]),
+  };
+};
+
+export const getOnchainPosition = async (
+  leagueAddress: string,
+  weekId: bigint,
+  address: string,
+): Promise<ChainPositionState> => {
+  const provider = await getRuntimeProvider();
+  const league = new ethers.Contract(
+    leagueAddress,
+    [
+      "function positions(uint256,address) view returns (uint128 principal,uint128 risk,uint128 forfeitedReward,bytes32 lineupHash,uint8 swaps,bool claimed)",
+    ],
+    provider,
+  );
+  const state = await withTimeout(
+    league.positions(weekId, address),
+    REACTIVE_DESTINATION_READ_TIMEOUT_MS,
+    `positions(${weekId.toString()},${address})`,
+  );
+  return {
+    principal: asBigInt(state.principal ?? state[0]),
+    risk: asBigInt(state.risk ?? state[1]),
+    forfeitedReward: asBigInt(state.forfeitedReward ?? state[2]),
+    lineupHash: normalizeHex(state.lineupHash ?? state[3]),
+    swaps: asNumber(state.swaps ?? state[4]),
+    claimed: Boolean(state.claimed ?? state[5]),
+  };
+};
+
+export const getOnchainTestMode = async (leagueAddress: string): Promise<boolean> => {
+  const provider = await getRuntimeProvider();
+  const league = new ethers.Contract(leagueAddress, ["function testMode() view returns (bool)"], provider);
+  return Boolean(
+    await withTimeout(
+      league.testMode(),
+      REACTIVE_DESTINATION_READ_TIMEOUT_MS,
+      "testMode()",
+    ),
+  );
+};
+
+export const getOnchainPaused = async (leagueAddress: string): Promise<boolean> => {
+  const provider = await getRuntimeProvider();
+  const league = new ethers.Contract(leagueAddress, ["function paused() view returns (bool)"], provider);
+  return Boolean(
+    await withTimeout(
+      league.paused(),
+      REACTIVE_DESTINATION_READ_TIMEOUT_MS,
+      "paused()",
+    ),
+  );
+};
+
 export const createWeekOnchain = async (
   leagueAddress: string,
   weekId: bigint,
@@ -1054,18 +881,7 @@ export const createWeekOnchain = async (
   endAt: number,
   lifecycleIntentOpKey?: string,
 ): Promise<string> => {
-  const chainType = await getRuntimeChainType();
-  if (chainType === "starknet") {
-    return sendStarknetInvoke(
-      "oracle",
-      leagueAddress,
-      "create_week",
-      [weekId, BigInt(startAt), BigInt(lockAt), BigInt(endAt)],
-      `create_week(${weekId.toString()})`,
-    );
-  }
-
-  const opKey = requireLifecycleIntentOpKey(lifecycleIntentOpKey, "createWeekOnchain");
+  const opKey = resolveLifecycleIntentOpKey(lifecycleIntentOpKey, `create:${weekId.toString()}:${startAt}:${lockAt}:${endAt}`);
   const intentId = toIntentId(opKey);
 
   const reactive = await getReactiveTransportConfig();
@@ -1117,19 +933,10 @@ export const sendTransitionOnchain = async (
   useForce: boolean,
   lifecycleIntentOpKey?: string,
 ): Promise<string> => {
-  const chainType = await getRuntimeChainType();
-  if (chainType === "starknet") {
-    const fnName = useForce
-      ? action === "lock"
-        ? "force_lock_week"
-        : "force_start_week"
-      : action === "lock"
-      ? "lock_week"
-      : "start_week";
-    return sendStarknetInvoke("oracle", leagueAddress, fnName, [weekId], `${fnName}(${weekId.toString()})`);
-  }
-
-  const opKey = requireLifecycleIntentOpKey(lifecycleIntentOpKey, "sendTransitionOnchain");
+  const opKey = resolveLifecycleIntentOpKey(
+    lifecycleIntentOpKey,
+    `transition:${action}:${weekId.toString()}:${useForce ? "force" : "timed"}`,
+  );
   const intentId = toIntentId(opKey);
 
   const reactive = await getReactiveTransportConfig();
@@ -1186,21 +993,10 @@ export const sendFinalizeOnchain = async (
   useForce: boolean,
   lifecycleIntentOpKey?: string,
 ): Promise<string> => {
-  const chainType = await getRuntimeChainType();
-  if (chainType === "starknet") {
-    const fnName = useForce ? "force_finalize_week" : "finalize_week";
-    const rootFelt = normalizeHashForStarknetFelt(root);
-    const metadataHashFelt = normalizeHashForStarknetFelt(metadataHash);
-    return sendStarknetInvoke(
-      "oracle",
-      leagueAddress,
-      fnName,
-      [weekId, rootFelt, metadataHashFelt, retainedFee],
-      `${fnName}(${weekId.toString()})`,
-    );
-  }
-
-  const opKey = requireLifecycleIntentOpKey(lifecycleIntentOpKey, "sendFinalizeOnchain");
+  const opKey = resolveLifecycleIntentOpKey(
+    lifecycleIntentOpKey,
+    `finalize:${weekId.toString()}:${String(root).toLowerCase()}:${String(metadataHash).toLowerCase()}:${retainedFee.toString()}:${useForce ? "force" : "timed"}`,
+  );
   const intentId = toIntentId(opKey);
 
   const reactive = await getReactiveTransportConfig();
@@ -1252,12 +1048,7 @@ export const sendApproveFinalizationOnchain = async (
   weekId: bigint,
   lifecycleIntentOpKey?: string,
 ): Promise<string> => {
-  const chainType = await getRuntimeChainType();
-  if (chainType === "starknet") {
-    return sendStarknetInvoke("auditor", leagueAddress, "approve_finalization", [weekId], `approve_finalization(${weekId.toString()})`);
-  }
-
-  const opKey = requireLifecycleIntentOpKey(lifecycleIntentOpKey, "sendApproveFinalizationOnchain");
+  const opKey = resolveLifecycleIntentOpKey(lifecycleIntentOpKey, `approve:${weekId.toString()}`);
   const intentId = toIntentId(opKey);
 
   const reactive = await getReactiveTransportConfig();
@@ -1296,12 +1087,7 @@ export const sendRejectFinalizationOnchain = async (
   weekId: bigint,
   lifecycleIntentOpKey?: string,
 ): Promise<string> => {
-  const chainType = await getRuntimeChainType();
-  if (chainType === "starknet") {
-    return sendStarknetInvoke("auditor", leagueAddress, "reject_finalization", [weekId], `reject_finalization(${weekId.toString()})`);
-  }
-
-  const opKey = requireLifecycleIntentOpKey(lifecycleIntentOpKey, "sendRejectFinalizationOnchain");
+  const opKey = resolveLifecycleIntentOpKey(lifecycleIntentOpKey, `reject:${weekId.toString()}`);
   const intentId = toIntentId(opKey);
 
   const reactive = await getReactiveTransportConfig();
@@ -1334,18 +1120,8 @@ export const sendRejectFinalizationOnchain = async (
     (league, overrides) => (league as any).rejectFinalizationWithIntent(intentId, weekId, overrides),
   );
 };
-export const sendSetTestModeOnchain = async (leagueAddress: string, enabled: boolean): Promise<string> => {
-  const chainType = await getRuntimeChainType();
-  if (chainType === "starknet") {
-    return sendStarknetInvoke(
-      "contract_admin",
-      leagueAddress,
-      "set_test_mode",
-      [enabled ? 1n : 0n],
-      `set_test_mode(${String(enabled)})`,
-    );
-  }
 
+export const sendSetTestModeOnchain = async (leagueAddress: string, enabled: boolean): Promise<string> => {
   return sendEvmChainTx(
     "contract_admin",
     leagueAddress,
@@ -1357,11 +1133,6 @@ export const sendSetTestModeOnchain = async (leagueAddress: string, enabled: boo
 };
 
 export const sendPauseOnchain = async (leagueAddress: string): Promise<string> => {
-  const chainType = await getRuntimeChainType();
-  if (chainType === "starknet") {
-    return sendStarknetInvoke("pauser", leagueAddress, "pause", [], "pause");
-  }
-
   return sendEvmChainTx(
     "pauser",
     leagueAddress,
@@ -1372,11 +1143,6 @@ export const sendPauseOnchain = async (leagueAddress: string): Promise<string> =
 };
 
 export const sendUnpauseOnchain = async (leagueAddress: string): Promise<string> => {
-  const chainType = await getRuntimeChainType();
-  if (chainType === "starknet") {
-    return sendStarknetInvoke("pauser", leagueAddress, "unpause", [], "unpause");
-  }
-
   return sendEvmChainTx(
     "pauser",
     leagueAddress,
@@ -1388,15 +1154,6 @@ export const sendUnpauseOnchain = async (leagueAddress: string): Promise<string>
 };
 
 export const isOnchainTxSuccessful = async (txHash: string): Promise<boolean> => {
-  const chainType = await getRuntimeChainType();
-  if (chainType === "starknet") {
-    return withRuntimeStarknetProvider(async (provider) => {
-      const receipt = await provider.getTransactionReceipt(txHash);
-      const statusText = String((receipt as { execution_status?: string }).execution_status ?? "").toUpperCase();
-      return statusText === "SUCCEEDED";
-    });
-  }
-
   const provider = await getRuntimeProvider();
   const receipt = await provider.getTransactionReceipt(txHash);
   return Boolean(receipt && Number(receipt.status) === 1);
@@ -1407,30 +1164,6 @@ export const mintStablecoinOnchain = async (
   recipient: string,
   amountWei: bigint,
 ): Promise<string> => {
-  const chainType = await getRuntimeChainType();
-  if (chainType === "starknet") {
-    const mintAbi = [
-      {
-        type: "function",
-        name: "mint",
-        inputs: [
-          { name: "recipient", type: "core::starknet::contract_address::ContractAddress" },
-          { name: "amount", type: "core::integer::u256" },
-        ],
-        outputs: [],
-        state_mutability: "external",
-      },
-    ];
-    return sendStarknetInvoke(
-      "faucet_minter",
-      stablecoinAddress,
-      "mint",
-      [recipient, toU256(amountWei)],
-      `mint(${recipient})`,
-      mintAbi,
-    );
-  }
-
   return sendEvmChainTx(
     "faucet_minter",
     stablecoinAddress,
@@ -1440,28 +1173,5 @@ export const mintStablecoinOnchain = async (
       (token as any).mint(recipient, amountWei, overrides),
   );
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 

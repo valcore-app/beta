@@ -1,48 +1,46 @@
 {
-  "name": "oracle",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "dev": "tsx src/server.ts",
-    "build": "node ./node_modules/typescript/bin/tsc -p tsconfig.json",
-    "start": "node dist/server.js",
-    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
-    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
-    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
-    "job:seed": "tsx src/jobs/seed-categories.ts",
-    "job:week": "tsx src/jobs/job-week.ts",
-    "job:refresh-week-coins": "tsx src/jobs/run-refresh-week-coins.ts",
-    "job:momentum-live": "tsx src/jobs/run-momentum-live.ts",
-    "job:finalize": "tsx src/jobs/run-finalize.ts",
-    "job:finalize-audit": "tsx src/jobs/run-finalize-audit.ts",
-    "job:finalize-reject": "tsx src/jobs/run-finalize-reject.ts",
-    "job:transition": "tsx src/jobs/run-transition.ts",
-    "job:time-mode": "tsx src/jobs/run-time-mode.ts",
-    "job:reset-db": "tsx src/jobs/run-reset-db.ts",
-    "job:pause": "tsx src/jobs/run-pause.ts",
-    "job:unpause": "tsx src/jobs/run-unpause.ts"
-  },
-  "dependencies": {
-    "@fastify/cors": "11.2.0",
-    "dotenv": "16.4.5",
-    "ethers": "6.13.2",
-    "fastify": "5.7.3",
-    "keccak256": "1.0.6",
-    "merkletreejs": "0.4.0",
-    "pg": "^8.13.1",
-    "zod": "3.23.8",
-    "starknet": "^9.4.2"
-  },
-  "devDependencies": {
-    "@jest/globals": "^30.2.0",
-    "@types/jest": "^30.0.0",
-    "@types/node": "20.14.10",
-    "@types/pg": "^8.11.10",
-    "jest": "^30.2.0",
-    "ts-jest": "^29.4.6",
-    "tsx": "4.19.0",
-    "typescript": "5.4.5"
-  }
+    "name":  "oracle",
+    "version":  "0.1.0",
+    "private":  true,
+    "type":  "module",
+    "scripts":  {
+                    "dev":  "tsx src/server.ts",
+                    "build":  "node ./node_modules/typescript/bin/tsc -p tsconfig.json",
+                    "start":  "node dist/server.js",
+                    "test":  "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+                    "test:watch":  "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
+                    "test:coverage":  "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
+                    "job:seed":  "tsx src/jobs/seed-categories.ts",
+                    "job:week":  "tsx src/jobs/run-week.ts",
+                    "job:refresh-week-coins":  "tsx src/jobs/run-refresh-week-coins.ts",
+                    "job:momentum-live":  "tsx src/jobs/run-momentum-live.ts",
+                    "job:finalize":  "tsx src/jobs/run-finalize.ts",
+                    "job:finalize-audit":  "tsx src/jobs/run-finalize-audit.ts",
+                    "job:finalize-reject":  "tsx src/jobs/run-finalize-reject.ts",
+                    "job:transition":  "tsx src/jobs/run-transition.ts",
+                    "job:time-mode":  "tsx src/jobs/run-time-mode.ts",
+                    "job:reset-db":  "tsx src/jobs/run-reset-db.ts",
+                    "job:pause":  "tsx src/jobs/run-pause.ts",
+                    "job:unpause":  "tsx src/jobs/run-unpause.ts"
+                },
+    "dependencies":  {
+                         "@fastify/cors":  "11.2.0",
+                         "dotenv":  "16.4.5",
+                         "ethers":  "6.13.2",
+                         "fastify":  "5.7.3",
+                         "keccak256":  "1.0.6",
+                         "merkletreejs":  "0.4.0",
+                         "pg":  "^8.13.1",
+                         "zod":  "3.23.8"
+                     },
+    "devDependencies":  {
+                            "@jest/globals":  "^30.2.0",
+                            "@types/jest":  "^30.0.0",
+                            "@types/node":  "20.14.10",
+                            "@types/pg":  "^8.11.10",
+                            "jest":  "^30.2.0",
+                            "ts-jest":  "^29.4.6",
+                            "tsx":  "4.19.0",
+                            "typescript":  "5.4.5"
+                        }
 }
-

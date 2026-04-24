@@ -11,7 +11,6 @@ export type RuntimeProfile = {
   rpcUrl: string;
   explorerUrl: string;
   nativeSymbol: string;
-  nativeTokenAddress?: `0x${string}`;
   stablecoinSymbol: string;
   stablecoinName: string;
   stablecoinDecimals: number;
@@ -27,7 +26,6 @@ type RuntimeProfileResponse = {
   rpcUrl?: string | null;
   explorerUrl?: string | null;
   nativeSymbol?: string | null;
-  nativeTokenAddress?: string | null;
   stablecoin?: {
     symbol?: string | null;
     name?: string | null;
@@ -51,37 +49,26 @@ const normalizeText = (value: unknown) => {
   return normalized || "";
 };
 
-const normalizeChainType = (value: unknown) => {
-  const normalized = normalizeText(value).toLowerCase();
-  return normalized || "evm";
-};
-
 const isHttpUrl = (value: string) => /^https?:\/\//iu.test(value);
 
-const resolveRpcUrl = (value: unknown, chainType: string) => {
-  if (chainType === "starknet") {
-    const browserReadRpc = normalizeText(process.env.NEXT_PUBLIC_CHAIN_READ_RPC_URL);
-    if (isHttpUrl(browserReadRpc) || browserReadRpc.startsWith("/")) {
-      return browserReadRpc;
-    }
-  }
+const FALLBACK_RPC_URL =
+  normalizeText(process.env.NEXT_PUBLIC_CHAIN_RPC_URL) ||
+  "https://ethereum-sepolia-rpc.publicnode.com";
 
+const resolveRpcUrl = (value: unknown) => {
   const fromProfile = normalizeText(value);
+  const fromEnv = normalizeText(process.env.NEXT_PUBLIC_CHAIN_RPC_URL);
+
   if (isHttpUrl(fromProfile)) return fromProfile;
   if (fromProfile.startsWith("/")) return fromProfile;
-  throw new Error("rpcUrl is missing in runtime profile");
+  if (isHttpUrl(fromEnv)) return fromEnv;
+  if (fromEnv.startsWith("/")) return fromEnv;
+
+  return FALLBACK_RPC_URL;
 };
 
-const normalizeAddress = (
-  value: unknown,
-  chainType: string,
-): `0x${string}` | undefined => {
+const normalizeAddress = (value: unknown): `0x${string}` | undefined => {
   const normalized = normalizeText(value);
-  if (!normalized) return undefined;
-  if (chainType === "starknet") {
-    if (!/^0x[a-fA-F0-9]{1,64}$/u.test(normalized)) return undefined;
-    return normalized.toLowerCase() as `0x${string}`;
-  }
   if (!/^0x[a-fA-F0-9]{40}$/u.test(normalized)) return undefined;
   return normalized as `0x${string}`;
 };
@@ -102,26 +89,22 @@ const requirePositiveInt = (value: unknown, label: string) => {
   return parsed;
 };
 
-const mapResponse = (payload: RuntimeProfileResponse): RuntimeProfile => {
-  const chainType = normalizeChainType(payload.chainType);
-  return {
-    networkKey: requireText(payload.networkKey, "networkKey"),
-    label: requireText(payload.label, "label"),
-    chainType,
-    chainId: requirePositiveInt(payload.chainId, "chainId"),
-    rpcUrl: resolveRpcUrl(payload.rpcUrl, chainType),
-    explorerUrl: requireText(payload.explorerUrl, "explorerUrl"),
-    nativeSymbol: requireText(payload.nativeSymbol, "nativeSymbol"),
-    nativeTokenAddress: normalizeAddress(payload.nativeTokenAddress, chainType),
-    stablecoinSymbol: requireText(payload.stablecoin?.symbol, "stablecoin.symbol"),
-    stablecoinName: requireText(payload.stablecoin?.name, "stablecoin.name"),
-    stablecoinDecimals: requirePositiveInt(payload.stablecoin?.decimals, "stablecoin.decimals"),
-    stablecoinAddress:
-      normalizeAddress(payload.stablecoin?.address, chainType) ??
-      normalizeAddress(payload.contracts?.stablecoinAddress, chainType),
-    leagueAddress: normalizeAddress(payload.contracts?.leagueAddress, chainType),
-  };
-};
+const mapResponse = (payload: RuntimeProfileResponse): RuntimeProfile => ({
+  networkKey: requireText(payload.networkKey, "networkKey"),
+  label: requireText(payload.label, "label"),
+  chainType: requireText(payload.chainType, "chainType"),
+  chainId: requirePositiveInt(payload.chainId, "chainId"),
+  rpcUrl: resolveRpcUrl(payload.rpcUrl),
+  explorerUrl: requireText(payload.explorerUrl, "explorerUrl"),
+  nativeSymbol: requireText(payload.nativeSymbol, "nativeSymbol"),
+  stablecoinSymbol: requireText(payload.stablecoin?.symbol, "stablecoin.symbol"),
+  stablecoinName: requireText(payload.stablecoin?.name, "stablecoin.name"),
+  stablecoinDecimals: requirePositiveInt(payload.stablecoin?.decimals, "stablecoin.decimals"),
+  stablecoinAddress:
+    normalizeAddress(payload.stablecoin?.address) ??
+    normalizeAddress(payload.contracts?.stablecoinAddress),
+  leagueAddress: normalizeAddress(payload.contracts?.leagueAddress),
+});
 
 export const fetchRuntimeProfile = async (): Promise<RuntimeProfile> => {
   const payload = await apiGet<RuntimeProfileResponse>("/runtime/profile");
@@ -141,7 +124,3 @@ export const useRuntimeProfile = () => {
     profile: query.data ?? null,
   };
 };
-
-
-
-

@@ -182,7 +182,7 @@ const buildPlaywrightRuntimeProfile = () => {
       "http://127.0.0.1:8545",
     explorerUrl: process.env.CHAIN_EXPLORER_URL ?? process.env.EXPLORER_URL ?? "",
     nativeSymbol: process.env.CHAIN_NATIVE_SYMBOL ?? process.env.NATIVE_SYMBOL ?? "NATIVE",
-    nativeTokenAddress: process.env.CHAIN_NATIVE_TOKEN_ADDRESS ?? process.env.NEXT_PUBLIC_STARKNET_NATIVE_TOKEN_ADDRESS ?? null,
+    nativeTokenAddress: process.env.CHAIN_NATIVE_TOKEN_ADDRESS ?? null,
     stablecoin: {
       symbol: process.env.STABLECOIN_SYMBOL ?? "USDT",
       name: process.env.STABLECOIN_NAME ?? "Tether",

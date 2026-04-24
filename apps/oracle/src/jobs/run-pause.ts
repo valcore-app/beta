@@ -1,8 +1,11 @@
+import { ethers } from "ethers";
 import {
+  getRequiredRuntimePauserPrivateKey,
   getRequiredRuntimeValcoreAddress,
+  getRuntimeProvider,
   isValcoreChainEnabled,
 } from "../network/chain-runtime.js";
-import { getOnchainPaused, sendPauseOnchain } from "../network/valcore-chain-client.js";
+import { sendTxWithPolicy } from "../network/tx-policy.js";
 
 const run = async () => {
   if (!isValcoreChainEnabled()) {
@@ -11,12 +14,39 @@ const run = async () => {
   }
 
   const leagueAddress = await getRequiredRuntimeValcoreAddress();
-  if (await getOnchainPaused(leagueAddress)) {
+  const pauserKey = await getRequiredRuntimePauserPrivateKey();
+  const provider = await getRuntimeProvider();
+  const wallet = new ethers.Wallet(pauserKey, provider);
+
+  const league = new ethers.Contract(
+    leagueAddress,
+    [
+      "function paused() view returns (bool)",
+      "function pause()",
+      "function hasRole(bytes32,address) view returns (bool)",
+      "function PAUSER_ROLE() view returns (bytes32)",
+    ],
+    wallet,
+  );
+
+  if (await league.paused()) {
     console.log("pause skipped: contract is already paused");
     return;
   }
 
-  await sendPauseOnchain(leagueAddress);
+  const pauserRole = await league.PAUSER_ROLE();
+  const hasPauserRole = await league.hasRole(pauserRole, wallet.address);
+  if (!hasPauserRole) {
+    throw new Error(
+      `PAUSER_PRIVATE_KEY address ${wallet.address} is missing PAUSER_ROLE on ${leagueAddress}`,
+    );
+  }
+
+  await sendTxWithPolicy({
+    label: "pause",
+    signer: wallet,
+    send: (overrides) => league.pause(overrides),
+  });
 };
 
 run().catch((error) => {

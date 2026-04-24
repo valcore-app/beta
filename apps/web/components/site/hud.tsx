@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -7,9 +7,6 @@ import { useAccount, useBalance } from "wagmi";
 import { useHudContext } from "./hud-context";
 import { useWallet } from "../../lib/wallet";
 import { useRuntimeProfile } from "../../lib/runtime-profile";
-import { buildStarknetPlayerNameTypedData, normalizeStarknetSignature, resolveStarknetTypedDataChainId } from "../../lib/starknet-typed-data";
-import { readStarknetStablecoinBalance, readStarknetTokenMetadata } from "../../lib/starknet-chain";
-import { reportClientError } from "../../lib/error-report";
 
 const ORACLE_URL = "/api/oracle";
 const FALLBACK_FAUCET_AMOUNT = Number(process.env.NEXT_PUBLIC_FAUCET_STABLECOIN_AMOUNT ?? "200");
@@ -19,14 +16,10 @@ type PlayerProfileLookupState = "idle" | "loading" | "found" | "missing" | "erro
 
 export function Hud() {
   const { profile } = useRuntimeProfile();
-  const profileReady = Boolean(profile);
-  const profileChainType = profile?.chainType?.toLowerCase() ?? "";
-  const isEvmChain = profileChainType === "evm";
-  const profileNetworkKey = profile?.networkKey ?? "";
-  const profileExplorerUrl = profile?.explorerUrl ?? "";
-  const profileStablecoinDecimals = profile?.stablecoinDecimals ?? 18;
-  const profileRpcUrl = profile?.rpcUrl ?? "";
-  const stablecoinAddress = profile?.stablecoinAddress ?? "";
+  if (!profile) {
+    return null;
+  }
+  const stablecoinAddress = profile.stablecoinAddress;
   const pathname = usePathname();
   const showMoves = pathname.startsWith("/strategy") || pathname.startsWith("/lineup");
   const { statusLabel, countdownText, moves, week, swapMode, setSwapMode } = useHudContext();
@@ -39,48 +32,28 @@ export function Hud() {
     walletAuthStatus,
     refreshWalletSession,
     getWalletClient,
-    getStarknetWallet,
   } = useWallet();
   const { connector, isConnected: isWalletConnected } = useAccount();
-  const evmWalletAddress =
-    isEvmChain && /^0x[a-fA-F0-9]{40}$/u.test(String(address ?? ""))
-      ? (address as `0x${string}`)
-      : undefined;
-  const evmStablecoinAddress =
-    isEvmChain && /^0x[a-fA-F0-9]{40}$/u.test(String(stablecoinAddress ?? ""))
-      ? (stablecoinAddress as `0x${string}`)
-      : undefined;
-
   const { data: ethBalance } = useBalance({
-    address: evmWalletAddress,
-    query: { enabled: Boolean(evmWalletAddress) },
+    address: address ? (address as `0x${string}`) : undefined,
+    query: { enabled: Boolean(address) },
   });
   const { data: stablecoinBalance } = useBalance({
-    address: evmWalletAddress,
-    token: evmStablecoinAddress,
-    query: { enabled: Boolean(evmWalletAddress) && Boolean(evmStablecoinAddress) },
+    address: address ? (address as `0x${string}`) : undefined,
+    token: stablecoinAddress,
+    query: { enabled: Boolean(address) && Boolean(stablecoinAddress) },
   });
-  const stablecoinSymbol = profile?.stablecoinSymbol || "Stablecoin";
-  const nativeSymbol = profileChainType === "starknet" ? "STRK" : (profile?.nativeSymbol || "NATIVE");
-  const starknetNativeTokenAddress = profileChainType === "starknet"
-    ? (profile?.nativeTokenAddress ?? process.env.NEXT_PUBLIC_STARKNET_NATIVE_TOKEN_ADDRESS?.trim() ?? null)
-    : null;
+  const stablecoinSymbol = profile.stablecoinSymbol || "Stablecoin";
+  const nativeSymbol = profile.nativeSymbol || "NATIVE";
   const faucetAmount = FALLBACK_FAUCET_AMOUNT;
-  const starknetWalletInstallUrl =
-    process.env.NEXT_PUBLIC_STARKNET_WALLET_INSTALL_URL?.trim() ||
-    "https://chromewebstore.google.com/search/ready%20wallet";
-  const missingWalletInstallUrl = isEvmChain
-    ? "https://walletconnect.network/wallets"
-    : starknetWalletInstallUrl;
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [faucetPending, setFaucetPending] = useState(false);
-  const [starknetNativeBalance, setStarknetNativeBalance] = useState<bigint | null>(null);
-  const [starknetStablecoinBalance, setStarknetStablecoinBalance] = useState<bigint | null>(null);
   const [toast, setToast] = useState<{ message: string; href?: string; tone?: "warn" | "info" } | null>(
     null,
   );
   const toastTimer = useRef<number | null>(null);
   const [playerDisplayName, setPlayerDisplayName] = useState<string | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
   const [playerProfileLookupState, setPlayerProfileLookupState] =
     useState<PlayerProfileLookupState>("idle");
   const [playerNameModalOpen, setPlayerNameModalOpen] = useState(false);
@@ -121,16 +94,17 @@ export function Hud() {
   const normalizeNameInput = (value: string) => value.trim().replace(/\s+/g, " ");
   const buildPlayerNameApprovalMessage = (walletAddress: string, displayName: string, nonce: string) =>
     [
-      "Valcore Strategist Name Approval",
+      "Valcore Player Name Approval",
       `Address: ${walletAddress.toLowerCase()}`,
       `Display Name: ${displayName}`,
       `Nonce: ${nonce}`,
     ].join("\n");
 
   const fetchPlayerProfile = useCallback(async (walletAddress: string) => {
+    setProfileLoading(true);
     setPlayerProfileLookupState("loading");
     try {
-      const res = await fetch(`${ORACLE_URL}/strategists/${walletAddress.toLowerCase()}/profile`, {
+      const res = await fetch(`${ORACLE_URL}/players/${walletAddress.toLowerCase()}/profile`, {
         method: "GET",
         cache: "no-store",
         credentials: "same-origin",
@@ -152,6 +126,8 @@ export function Hud() {
     } catch {
       setPlayerProfileLookupState("error");
       return null;
+    } finally {
+      setProfileLoading(false);
     }
   }, []);
 
@@ -212,7 +188,7 @@ export function Hud() {
         if (address) {
           params.set("address", address);
         }
-        const res = await fetch(`${ORACLE_URL}/strategists/name-availability?${params.toString()}`, {
+        const res = await fetch(`${ORACLE_URL}/players/name-availability?${params.toString()}`, {
           method: "GET",
           cache: "no-store",
           credentials: "same-origin",
@@ -257,33 +233,7 @@ export function Hud() {
   };
 
   const signPlayerNameApproval = useCallback(
-    async (walletAddress: string, displayName: string, message: string, nonce: string) => {
-      if (!isEvmChain) {
-        const starknetWallet = getStarknetWallet();
-        const signer = starknetWallet?.provider?.account?.signMessage;
-        if (typeof signer !== "function") {
-          return null;
-        }
-
-        try {
-          const chainId = resolveStarknetTypedDataChainId(
-            profileNetworkKey,
-            process.env.NEXT_PUBLIC_STARKNET_TYPED_DATA_CHAIN_ID,
-          );
-          const typedData = buildStarknetPlayerNameTypedData(walletAddress, displayName, nonce, chainId);
-          const rawSignature = await signer(typedData);
-          const normalized = normalizeStarknetSignature(
-            (rawSignature as { signature?: unknown } | null)?.signature ?? rawSignature,
-          );
-          if (normalized?.length) {
-            return normalized;
-          }
-          return null;
-        } catch {
-          return null;
-        }
-      }
-
+    async (walletAddress: string, message: string) => {
       const directClient = getWalletClient();
       if (directClient) {
         return directClient.signMessage({
@@ -313,12 +263,12 @@ export function Hud() {
 
       return null;
     },
-    [getStarknetWallet, getWalletClient, isEvmChain, profileNetworkKey],
+    [getWalletClient],
   );
 
   const handleRegisterPlayerName = async () => {
     if (!address) return;
-    if ((isEvmChain && !isWalletConnected) || !address) {
+    if (!isWalletConnected) {
       showToast("Wallet disconnected. Reconnect and try again.", "warn");
       return;
     }
@@ -329,53 +279,41 @@ export function Hud() {
 
     setPlayerNameSaving(true);
     try {
-      let payloadBody: Record<string, unknown> = {
-        address,
-        displayName,
-      };
-
-      const shouldTrySignature = isEvmChain;
-
-      if (shouldTrySignature) {
-        const nonceRes = await fetch(`${ORACLE_URL}/strategists/profile/nonce`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          credentials: "same-origin",
-          body: JSON.stringify({ address }),
-        });
-        const noncePayload = await nonceRes.json().catch(() => ({}));
-        if (!nonceRes.ok) {
-          showToast(noncePayload?.error ?? "Failed to prepare signature.", "warn");
-          return;
-        }
-
-        const nonce = String(noncePayload?.nonce ?? "").trim();
-        if (!nonce) {
-          if (isEvmChain) {
-            showToast("Failed to prepare signature.", "warn");
-            return;
-          }
-        } else {
-          const approvalMessage = buildPlayerNameApprovalMessage(address, displayName, nonce);
-          const signature = await signPlayerNameApproval(address, displayName, approvalMessage, nonce);
-          if (signature) {
-            payloadBody = {
-              ...payloadBody,
-              nonce,
-              signature,
-            };
-          } else if (isEvmChain) {
-            showToast("Wallet signer unavailable. Reconnect and try again.", "warn");
-            return;
-          }
-        }
-      }
-
-      const res = await fetch(`${ORACLE_URL}/strategists/profile`, {
+      const nonceRes = await fetch(`${ORACLE_URL}/players/profile/nonce`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify(payloadBody),
+        body: JSON.stringify({ address }),
+      });
+      const noncePayload = await nonceRes.json().catch(() => ({}));
+      if (!nonceRes.ok) {
+        showToast(noncePayload?.error ?? "Failed to prepare signature.", "warn");
+        return;
+      }
+
+      const nonce = String(noncePayload?.nonce ?? "").trim();
+      if (!nonce) {
+        showToast("Failed to prepare signature.", "warn");
+        return;
+      }
+
+      const approvalMessage = buildPlayerNameApprovalMessage(address, displayName, nonce);
+      const signature = await signPlayerNameApproval(address, approvalMessage);
+      if (!signature) {
+        showToast("Wallet signer unavailable. Reconnect and try again.", "warn");
+        return;
+      }
+
+      const res = await fetch(`${ORACLE_URL}/players/profile`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          address,
+          displayName,
+          nonce,
+          signature,
+        }),
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -383,15 +321,15 @@ export function Hud() {
           setPlayerNameAvailability("taken");
           return;
         }
-        showToast(payload?.error ?? "Failed to save strategist name.", "warn");
+        showToast(payload?.error ?? "Failed to save player name.", "warn");
         return;
       }
       const savedName = String(payload?.displayName ?? displayName).trim();
       setPlayerDisplayName(savedName || displayName);
       setPlayerNameModalOpen(false);
-      showToast("Strategist name saved.");
+      showToast("Player name saved.");
     } catch {
-      showToast("Failed to save strategist name.", "warn");
+      showToast("Failed to save player name.", "warn");
     } finally {
       setPlayerNameSaving(false);
     }
@@ -400,41 +338,12 @@ export function Hud() {
   const handleFaucet = async () => {
     if (!address || faucetPending) return;
     const normalizedAddress = address.toLowerCase();
-    let sessionReady = walletSessionAddress === normalizedAddress;
-
-    if (!sessionReady) {
-      sessionReady = await refreshWalletSession({ force: true });
-    }
-
-    if (!sessionReady && !isEvmChain) {
-      try {
-        await connect();
-      } catch {
-        // retry below
+    if (walletSessionAddress !== normalizedAddress) {
+      const ok = await refreshWalletSession({ force: true });
+      if (!ok) {
+        showToast("Please complete wallet signature first.", "warn");
+        return;
       }
-      sessionReady = await refreshWalletSession({ force: true });
-    }
-
-    if (!sessionReady) {
-      void reportClientError({
-        source: "hud",
-        severity: "warn",
-        category: "wallet-auth",
-        message: "Please complete wallet signature first.",
-        fingerprint: "hud-faucet-wallet-session-missing",
-        path: pathname,
-        method: "POST",
-        context: {
-          action: "faucet",
-          chainType: profileChainType || "unknown",
-          hasAddress: Boolean(address),
-          walletAuthStatus,
-          walletSessionAddress: walletSessionAddress ?? null,
-        },
-        walletAddress: address ?? undefined,
-      });
-      showToast("Please complete wallet signature first.", "warn");
-      return;
     }
 
     setFaucetPending(true);
@@ -474,7 +383,7 @@ export function Hud() {
         showToast(
           `Faucet sent: ${payload?.amount ?? faucetAmount} ${stablecoinSymbol}`,
           "info",
-          profileExplorerUrl ? `${profileExplorerUrl}/tx/${txHash}` : undefined,
+          profile.explorerUrl ? `${profile.explorerUrl}/tx/${txHash}` : undefined,
         );
       } else {
         showToast(`Faucet sent: ${payload?.amount ?? faucetAmount} ${stablecoinSymbol}`, "info");
@@ -484,193 +393,6 @@ export function Hud() {
     } finally {
       setFaucetPending(false);
     }
-  };
-
-  const handleAddStablecoinToWallet = async () => {
-    if (!stablecoinAddress) {
-      showToast("Stablecoin address is unavailable.", "warn");
-      return;
-    }
-
-    const tokenAddress = stablecoinAddress.trim();
-    if (!tokenAddress) {
-      showToast("Stablecoin address is unavailable.", "warn");
-      return;
-    }
-
-    const tokenUrl = profileExplorerUrl
-      ? `${profileExplorerUrl.replace(/\/+$/u, "")}/token/${tokenAddress}`
-      : undefined;
-    const copyForManualAdd = async () => {
-      try {
-        await navigator.clipboard.writeText(tokenAddress);
-        showToast(`${stablecoinSymbol} address copied. Add token manually in wallet.`, "info", tokenUrl);
-      } catch {
-        showToast("Wallet does not support auto-add. Add token manually.", "warn", tokenUrl);
-      }
-    };
-
-    if (isEvmChain) {
-      const injected = (window as Window & {
-        ethereum?: { request?: (args: { method: string; params?: unknown[] }) => Promise<unknown> };
-      }).ethereum;
-      if (typeof injected?.request !== "function") {
-        showToast("Wallet client unavailable.", "warn");
-        return;
-      }
-      try {
-        const added = await injected.request({
-          method: "wallet_watchAsset",
-          params: [
-            {
-              type: "ERC20",
-              options: {
-                address: tokenAddress,
-                symbol: stablecoinSymbol,
-                decimals: profileStablecoinDecimals,
-              },
-            },
-          ],
-        });
-        if (added) {
-          showToast(`${stablecoinSymbol} added to wallet.`);
-        } else {
-          showToast("Token add request was ignored by wallet.", "warn");
-        }
-        return;
-      } catch {
-        showToast(`Failed to add ${stablecoinSymbol} to wallet.`, "warn");
-        return;
-      }
-    }
-
-    const starknetWallet = getStarknetWallet();
-    const request = starknetWallet?.provider?.request;
-    if (typeof request !== "function") {
-      await copyForManualAdd();
-      return;
-    }
-
-    try {
-      let tokenSymbol = stablecoinSymbol;
-      let tokenDecimals = profileStablecoinDecimals;
-      let walletMetadataReady = false;
-      try {
-        if (!profileRpcUrl) {
-          throw new Error("RPC URL missing");
-        }
-        const metadata = await readStarknetTokenMetadata(profileRpcUrl, tokenAddress);
-        if (metadata.symbol) {
-          tokenSymbol = metadata.symbol;
-        }
-        if (Number.isInteger(metadata.decimals) && Number(metadata.decimals) >= 0) {
-          tokenDecimals = Number(metadata.decimals);
-        }
-        walletMetadataReady = Boolean(metadata.symbol) && Number.isInteger(metadata.decimals);
-      } catch {
-        // keep profile defaults
-      }
-
-      await request({
-        type: "wallet_watchAsset",
-        params: {
-          type: "ERC20",
-          options: {
-            address: tokenAddress,
-            symbol: tokenSymbol,
-            decimals: tokenDecimals,
-          },
-        },
-      });
-      showToast(`${tokenSymbol} add request sent to wallet.`);
-      if (!walletMetadataReady) {
-        showToast(
-          "Token added, but wallet may show 0 if token metadata is non-standard. In-app balance is authoritative.",
-          "warn",
-        );
-      }
-    } catch {
-      await copyForManualAdd();
-    }
-  };
-  useEffect(() => {
-    if (isEvmChain || !address || !starknetNativeTokenAddress || !profileRpcUrl) {
-      setStarknetNativeBalance(null);
-      return;
-    }
-
-    let cancelled = false;
-
-    const loadBalance = async () => {
-      try {
-        const value = await readStarknetStablecoinBalance(
-          profileRpcUrl,
-          starknetNativeTokenAddress,
-          address,
-        );
-        if (!cancelled) {
-          setStarknetNativeBalance(value);
-        }
-      } catch {
-        if (!cancelled) {
-          setStarknetNativeBalance(null);
-        }
-      }
-    };
-
-    void loadBalance();
-    const timer = window.setInterval(() => {
-      void loadBalance();
-    }, 15000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [address, isEvmChain, profileRpcUrl, starknetNativeTokenAddress]);
-
-  useEffect(() => {
-    if (isEvmChain || !address || !stablecoinAddress || !profileRpcUrl) {
-      setStarknetStablecoinBalance(null);
-      return;
-    }
-
-    let cancelled = false;
-
-    const loadBalance = async () => {
-      try {
-        const value = await readStarknetStablecoinBalance(
-          profileRpcUrl,
-          stablecoinAddress,
-          address,
-        );
-        if (!cancelled) {
-          setStarknetStablecoinBalance(value);
-        }
-      } catch {
-        if (!cancelled) {
-          setStarknetStablecoinBalance(null);
-        }
-      }
-    };
-
-    void loadBalance();
-    const timer = window.setInterval(() => {
-      void loadBalance();
-    }, 15000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [address, isEvmChain, profileRpcUrl, stablecoinAddress]);
-  const formatTokenBalance = (value: bigint, decimals = 18, precision = 4) => {
-    const base = 10n ** BigInt(decimals);
-    const whole = value / base;
-    const fraction = value % base;
-    const fractionRaw = fraction.toString().padStart(decimals, "0").slice(0, precision);
-    const fractionTrimmed = fractionRaw.replace(/0+$/u, "");
-    return fractionTrimmed ? `${whole.toString()}.${fractionTrimmed}` : whole.toString();
   };
   const walletLabel = useMemo(() => {
     if (!address) return "Connect wallet";
@@ -685,41 +407,17 @@ export function Hud() {
   }, [address, playerDisplayName]);
 
   const ethBalanceLabel = useMemo(() => {
-    if (!isEvmChain) {
-      if (starknetNativeBalance === null) return `-- ${nativeSymbol}`;
-      return `${formatTokenBalance(starknetNativeBalance, 18, 4)} ${nativeSymbol}`;
-    }
     if (!ethBalance) return `-- ${nativeSymbol}`;
     const value = Number(ethBalance.formatted);
     return `${value.toFixed(4)} ${nativeSymbol}`;
-  }, [ethBalance, isEvmChain, nativeSymbol, starknetNativeBalance]);
+  }, [ethBalance, nativeSymbol]);
 
   const stablecoinBalanceLabel = useMemo(() => {
     if (!address) return `-- ${stablecoinSymbol}`;
-    if (!isEvmChain) {
-      if (starknetStablecoinBalance === null) return `$0 ${stablecoinSymbol}`;
-      const formatted = formatTokenBalance(
-        starknetStablecoinBalance,
-        profileStablecoinDecimals,
-        2,
-      );
-      const value = Number(formatted);
-      if (!Number.isFinite(value)) {
-        return `$${formatted} ${stablecoinSymbol}`;
-      }
-      return `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${stablecoinSymbol}`;
-    }
     if (!stablecoinBalance) return `$0 ${stablecoinSymbol}`;
     const value = Number(stablecoinBalance.formatted);
     return `$${Math.floor(value).toLocaleString()} ${stablecoinSymbol}`;
-  }, [
-    address,
-    isEvmChain,
-    profileStablecoinDecimals,
-    stablecoinBalance,
-    stablecoinSymbol,
-    starknetStablecoinBalance,
-  ]);
+  }, [address, stablecoinBalance, stablecoinSymbol]);
 
   const isPlayerNameInputInvalid = !isPlayerNameFormatValid || playerNameAvailability === "taken";
   const canRegisterPlayerName =
@@ -741,18 +439,14 @@ export function Hud() {
     );
   };
 
-  if (!profileReady) {
-    return null;
-  }
-
   return (
     <>
       <header className="vc-hud">
         <div className="hud-left">
-          <Link href="/strategy" className="hud-logo" aria-label="Go to strategy board">
+          <Link href="/lineup" className="hud-logo" aria-label="Go to lineup">
             <img src="/brand/logo.png" alt="Valcore" />
           </Link>
-          <div className="hud-subtitle">Strategy Execution Engine</div>
+          <div className="hud-subtitle">Strategic lineup command</div>
         </div>
 
         <div className="hud-center">
@@ -774,7 +468,7 @@ export function Hud() {
                 <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H19v14.5a1.5 1.5 0 0 1-1.5 1.5H6.5A2.5 2.5 0 0 1 4 17.5v-11Z" />
                 <path d="M8 8h7M8 11h7M8 14h5" />
               </svg>
-              <span>Protocol Guide</span>
+              <span>How It Works</span>
             </button>
           ) : null}
           {showMovesPanel ? (
@@ -833,21 +527,21 @@ export function Hud() {
                     void connect();
                     return;
                   }
-                  window.open(missingWalletInstallUrl, "_blank", "noreferrer");
+                  window.open("https://walletconnect.network/wallets", "_blank", "noreferrer");
                   return;
                 }
                 setWalletMenuOpen((prev) => !prev);
               }}
             >
               {address ? (
-                isEvmChain && connector?.icon ? (
+                connector?.icon ? (
                   <img
                     src={connector.icon}
                     alt={connector.name ?? "Wallet"}
                     className="hud-wallet-icon"
                   />
                 ) : (
-                  <span className="hud-wallet-icon fallback">{isEvmChain ? "W" : "SN"}</span>
+                  <span className="hud-wallet-icon fallback">W</span>
                 )
               ) : null}
               <span className="hud-wallet-label">{walletLabel}</span>
@@ -876,17 +570,7 @@ export function Hud() {
                     setWalletMenuOpen(false);
                   }}
                 >
-                  {playerDisplayName ? "Update strategist name" : "Set strategist name"}
-                </button>
-                <button
-                  type="button"
-                  className="hud-wallet-action"
-                  onClick={async () => {
-                    await handleAddStablecoinToWallet();
-                    setWalletMenuOpen(false);
-                  }}
-                >
-                  Add {stablecoinSymbol} to wallet
+                  {playerDisplayName ? "Update player name" : "Set player name"}
                 </button>
                 <button
                   type="button"
@@ -929,7 +613,7 @@ export function Hud() {
             className="w-full max-w-md rounded-2xl border border-[color:var(--border)] bg-[color:var(--bg-0)] p-5 shadow-[0_30px_90px_-45px_rgba(0,0,0,0.9)]"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="text-lg font-semibold text-[color:var(--text-primary)]">Strategist Name</div>
+            <div className="text-lg font-semibold text-[color:var(--text-primary)]">Player Name</div>
             <input
               type="text"
               value={playerNameDraft}
@@ -939,7 +623,7 @@ export function Hud() {
               className={`mt-4 h-11 w-full rounded-xl border bg-[color:var(--bg-1)] px-3 text-[color:var(--text-primary)] outline-none ${
                 isPlayerNameInputInvalid ? "border-[color:var(--wildcard)]" : "border-[color:var(--border)]"
               }`}
-              placeholder="Your strategist name"
+              placeholder="Your player name"
             />
             {playerNameAvailability === "taken" ? (
               <p className="mt-2 text-xs text-[color:var(--wildcard)]">already taken</p>
@@ -1007,24 +691,3 @@ export function Hud() {
     </>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -18,11 +18,7 @@ import {
 } from "../db/db.js";
 import { getPricesBySymbols } from "./priceOracle.service.js";
 import { getWeekCoins, getCoins } from "../store.js";
-import {
-  getRuntimeChainType,
-  getRuntimeProvider,
-  withRuntimeStarknetProvider,
-} from "../network/chain-runtime.js";
+import { getRuntimeProvider } from "../network/chain-runtime.js";
 type SnapshotOptions = {
   txHash?: string | null;
   timestamp?: number | null;
@@ -43,36 +39,6 @@ const resolveSnapshotTimestamp = async (options: SnapshotOptions): Promise<numbe
  * Get transaction receipt and timestamp from tx hash
  */
 const getTxTimestamp = async (txHash: string): Promise<number> => {
-  const chainType = await getRuntimeChainType();
-  if (chainType === "starknet") {
-    return withRuntimeStarknetProvider(async (provider) => {
-      const receipt = (await provider.getTransactionReceipt(txHash)) as {
-        block_number?: number | string | bigint;
-        blockNumber?: number | string | bigint;
-      } | null;
-      if (!receipt) {
-        throw new Error(`Starknet transaction receipt not found for ${txHash}`);
-      }
-
-      const rawBlockNumber = receipt.block_number ?? receipt.blockNumber;
-      const blockNumber = Number(rawBlockNumber);
-      if (!Number.isFinite(blockNumber) || blockNumber < 0) {
-        throw new Error(
-          `Starknet block number missing for tx ${txHash} (raw=${String(rawBlockNumber)})`,
-        );
-      }
-
-      const block = (await provider.getBlock({ block_number: blockNumber } as any)) as {
-        timestamp?: number | string | bigint;
-      } | null;
-      const timestamp = Number(block?.timestamp);
-      if (!Number.isFinite(timestamp) || timestamp <= 0) {
-        throw new Error(`Starknet block timestamp missing for tx ${txHash}`);
-      }
-      return Math.floor(timestamp);
-    });
-  }
-
   const provider = await getRuntimeProvider();
   const receipt = await provider.getTransactionReceipt(txHash);
   if (!receipt) {
