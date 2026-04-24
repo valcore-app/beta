@@ -1,5 +1,5 @@
 import { env } from "../env.js";
-import { getCoins, getLineups, getWeekCoins, getWeeks, updateWeekStatus, countCompletedLifecycleIntents, syncStrategyEpochScoresForWeek } from "../store.js";
+import { getCoins, getLineups, getWeekCoins, getWeeks, updateWeekStatus, countCompletedLifecycleIntents } from "../store.js";
 import {
   finalizeActivePositionsAtWeekEnd,
   getLineupPositions,
@@ -28,14 +28,13 @@ import {
   getRuntimeValcoreAddress,
   isValcoreChainEnabled,
 } from "../network/chain-runtime.js";
-import { getOnchainFeeBps, getOnchainTestMode, getOnchainWeekState, sendFinalizeOnchain } from "../network/valcore-chain-client.js";
 import {
   ensureLifecycleIntent,
   markLifecycleIntentCompleted,
   markLifecycleIntentFailed,
   markLifecycleIntentSubmitted,
 } from "./lifecycle-intent.js";
-import { assertWeekChainSync } from "./week-sync-guard.js";
+import { getOnchainFeeBps, getOnchainTestMode, getOnchainWeekState, sendFinalizeOnchain } from "../network/valcore-chain-client.js";
 
 const automationMode = normalizeAutomationMode(process.env.AUTOMATION_MODE_EFFECTIVE ?? env.AUTOMATION_MODE);
 const derivedTimeMode = getDerivedTimeMode(automationMode);
@@ -47,68 +46,6 @@ const LineupSlotsSchema = z.array(
     coinId: z.string(),
   }),
 );
-
-const encodeClaimAddressForLeaf = (address: string, chainType: string) => {
-  const raw = String(address ?? "").trim();
-  if (chainType === "starknet") {
-    if (!/^0x[0-9a-fA-F]{1,64}$/u.test(raw)) {
-      throw new Error("Invalid Starknet address for finalize leaf: " + String(address ?? ""));
-    }
-    return ethers.toBeHex(BigInt(raw), 32);
-  }
-  return ethers.getAddress(raw);
-};
-
-const buildFinalizeLeaf = (
-  chainType: string,
-  contractAddress: string,
-  chainId: bigint,
-  weekId: bigint,
-  address: string,
-  principal: bigint,
-  riskPayout: bigint,
-  totalWithdraw: bigint,
-) => {
-  if (chainType === "starknet") {
-    return ethers.solidityPackedKeccak256(
-      ["bytes32", "uint256", "uint256", "bytes32", "uint256", "uint256", "uint256"],
-      [
-        encodeClaimAddressForLeaf(contractAddress, "starknet"),
-        chainId,
-        weekId,
-        encodeClaimAddressForLeaf(address, "starknet"),
-        principal,
-        riskPayout,
-        totalWithdraw,
-      ],
-    );
-  }
-
-  return ethers.solidityPackedKeccak256(
-    ["address", "uint256", "uint256", "address", "uint256", "uint256", "uint256"],
-    [
-      encodeClaimAddressForLeaf(contractAddress, "evm"),
-      chainId,
-      weekId,
-      encodeClaimAddressForLeaf(address, "evm"),
-      principal,
-      riskPayout,
-      totalWithdraw,
-    ],
-  );
-};
-
-const normalizeHashForChain = (value: string, chainType: string) => {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  if (!/^0x[0-9a-f]+$/u.test(normalized)) {
-    throw new Error("Invalid hash for finalize payload: " + String(value ?? ""));
-  }
-  if (chainType !== "starknet") {
-    return normalized;
-  }
-  const starknetFieldPrime = BigInt("0x800000000000011000000000000000000000000000000000000000000000001");
-  return ethers.toBeHex(BigInt(normalized) % starknetFieldPrime, 32).toLowerCase();
-};
 
 const extractReactiveTxHash = (error: unknown): string | null => {
   const direct =
@@ -136,20 +73,6 @@ const run = async () => {
 
   const chainEnabled = isValcoreChainEnabled();
   const endTimestamp = Math.floor(Date.now() / 1000);
-
-  if (chainEnabled) {
-    const leagueAddressForGuard = await getRuntimeValcoreAddress();
-    if (!leagueAddressForGuard) {
-      throw new Error("finalize: VALCORE_ADDRESS is required when chain mode is enabled");
-    }
-    await assertWeekChainSync({
-      context: "run-finalize",
-      leagueAddress: leagueAddressForGuard,
-      weekId: week.id,
-      dbStatus: String(week.status ?? ""),
-      expectedOnchainStatus: 3,
-    });
-  }
 
   let weeklyPrices = await getWeeklyCoinPrices(week.id);
   if (!weeklyPrices.length) {
@@ -200,11 +123,8 @@ const run = async () => {
   }
 
   const lineups = await getLineups(week.id);
-  if (!lineups.length && isManual) {
-    throw new Error("No lineups found for finalize");
-  }
   if (!lineups.length) {
-    console.warn("finalize: no lineups found; continuing with empty settlement (automation mode)");
+    throw new Error("No lineups found for finalize");
   }
 
   const coins = await getCoins();
@@ -278,6 +198,7 @@ const run = async () => {
       console.warn("finalize: failed to read feeBps from chain, falling back to env. " + message);
     }
   }
+
   const riskTotalWei = scoredLineups.reduce((sum, row) => sum + row.riskWei, 0n);
   const losersRiskTotalWei = scoredLineups
     .filter((row) => row.finalScore < 0)
@@ -364,29 +285,28 @@ const run = async () => {
   const chainId = chainEnabled
     ? await getRuntimeChainIdBigInt()
     : await getConfiguredRuntimeChainIdBigInt();
-  const chainType = (await getRuntimeChainConfig()).chainType;
-  const isReactiveEvm = automationMode === "REACTIVE" && chainType === "evm";
   const weekId = BigInt(week.id);
   const leaves = claims.map((entry) =>
-    buildFinalizeLeaf(
-      chainType,
-      contractAddress,
-      chainId,
-      weekId,
-      entry.address,
-      BigInt(entry.principal),
-      BigInt(entry.riskPayout),
-      BigInt(entry.totalWithdraw),
+    ethers.solidityPackedKeccak256(
+      ["address", "uint256", "uint256", "address", "uint256", "uint256", "uint256"],
+      [
+        contractAddress,
+        chainId,
+        weekId,
+        entry.address,
+        BigInt(entry.principal),
+        BigInt(entry.riskPayout),
+        BigInt(entry.totalWithdraw),
+      ],
     ),
   );
 
-  const tree = leaves.length ? new MerkleTree(leaves, keccak256, { sortPairs: true }) : null;
-  const root = tree ? tree.getHexRoot() : ethers.keccak256(ethers.toUtf8Bytes(`VALCORE_EMPTY_ROOT:${week.id}`));
-  const rootForChain = normalizeHashForChain(root, chainType);
+  const tree = new MerkleTree(leaves, keccak256, { sortPairs: true });
+  const root = tree.getHexRoot();
 
   const claimsWithProof = claims.map((entry, idx) => {
     const leaf = leaves[idx];
-    const proof = tree ? tree.getHexProof(leaf) : [];
+    const proof = tree.getHexProof(leaf);
     return { ...entry, proof };
   });
 
@@ -419,8 +339,6 @@ const run = async () => {
     }
   });
 
-  await syncStrategyEpochScoresForWeek(String(week.id));
-
   const metadata = {
     weekId: week.id,
     generatedAt: new Date().toISOString(),
@@ -433,12 +351,11 @@ const run = async () => {
     retainedFeeWei: feeWei.toString(),
     distributionMode: applyCompetition ? "losers_pool_weighted" : "risk_refund_fallback",
     weightTotalScaled: weightTotal.toString(),
-    root: rootForChain,
+    root,
   };
 
   const metadataJson = JSON.stringify(metadata, null, 2);
   const metadataHash = ethers.keccak256(ethers.toUtf8Bytes(metadataJson));
-  const metadataHashForChain = normalizeHashForChain(metadataHash, chainType);
 
   const outDir = resolveDataDir();
   writeFileSync(resolve(outDir, `claims-${week.id}.json`), JSON.stringify(claimsWithProof, null, 2));
@@ -452,8 +369,8 @@ const run = async () => {
     operation: "finalize",
     details: {
       round: finalizeRound,
-      root: rootForChain,
-      metadataHash: metadataHashForChain,
+      root,
+      metadataHash,
       feeWei: feeWei.toString(),
       status: "FINALIZE_PENDING",
     },
@@ -463,6 +380,8 @@ const run = async () => {
     return;
   }
 
+  const chainType = (await getRuntimeChainConfig()).chainType;
+  const isReactiveEvm = chainType === "evm" && String(process.env.AUTOMATION_MODE_EFFECTIVE ?? env.AUTOMATION_MODE ?? "").trim().toUpperCase() === "REACTIVE";
   let txHash: string | null = intent.tx_hash ? String(intent.tx_hash).toLowerCase() : null;
   let reactiveTxHash: string | null = isReactiveEvm ? txHash : null;
 
@@ -507,20 +426,19 @@ const run = async () => {
         txHash = await sendFinalizeOnchain(
           leagueAddress,
           weekId,
-          rootForChain,
-          metadataHashForChain,
+          root,
+          metadataHash,
           feeWei,
           useForce,
           opKey,
         );
-
         if (isReactiveEvm) reactiveTxHash = txHash;
 
         intent =
           (await markLifecycleIntentSubmitted(intent, txHash, {
             txHash,
-            root: rootForChain,
-            metadataHash: metadataHashForChain,
+            root,
+            metadataHash,
             feeWei: feeWei.toString(),
             chainExecuted: true,
             reactiveTxHash,
@@ -533,8 +451,8 @@ const run = async () => {
           intent =
             (await markLifecycleIntentSubmitted(intent, dispatchedReactiveTx, {
               txHash: dispatchedReactiveTx,
-              root: rootForChain,
-              metadataHash: metadataHashForChain,
+              root,
+              metadataHash,
               feeWei: feeWei.toString(),
               chainExecuted: true,
               reactiveTxHash,
@@ -574,12 +492,13 @@ const run = async () => {
         );
       }
     }
+
     await updateWeekStatus(week.id, "FINALIZE_PENDING");
 
     await markLifecycleIntentCompleted(intent, {
       txHash,
-      root: rootForChain,
-      metadataHash: metadataHashForChain,
+      root,
+      metadataHash,
       feeWei: feeWei.toString(),
       status: "FINALIZE_PENDING",
       chainExecuted: Boolean(txHash),
@@ -589,8 +508,8 @@ const run = async () => {
     const message = error instanceof Error ? error.message : String(error);
     await markLifecycleIntentFailed(intent, message, {
       txHash,
-      root: rootForChain,
-      metadataHash: metadataHashForChain,
+      root,
+      metadataHash,
       feeWei: feeWei.toString(),
       status: "FINALIZE_PENDING",
       chainExecuted: Boolean(txHash),
@@ -604,8 +523,6 @@ run().catch((error) => {
   console.error("finalize job failed", error);
   process.exit(1);
 });
-
-
 
 
 

@@ -6,11 +6,7 @@ export const WALLET_NONCE_COOKIE = "valcore_wallet_nonce";
 
 const DEFAULT_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 const DEFAULT_NONCE_TTL_SECONDS = 10 * 60;
-
-type WalletChainType = "evm" | "starknet" | "any";
-
-const evmAddressRegex = /^0x[a-f0-9]{40}$/;
-const starknetAddressRegex = /^0x[a-f0-9]{1,64}$/;
+const walletAddressRegex = /^0x[a-f0-9]{40}$/;
 
 const getWalletAuthSecret = () => {
   const secret = (process.env.WALLET_AUTH_SECRET ?? process.env.NEXTAUTH_SECRET ?? "").trim();
@@ -38,26 +34,16 @@ const safeEqual = (left: string, right: string) => {
   return timingSafeEqual(leftBuffer, rightBuffer);
 };
 
-const isValidWalletAddress = (normalized: string, chainType: WalletChainType = "any") => {
-  if (chainType === "evm") {
-    return evmAddressRegex.test(normalized);
-  }
-  if (chainType === "starknet") {
-    return starknetAddressRegex.test(normalized);
-  }
-  return evmAddressRegex.test(normalized) || starknetAddressRegex.test(normalized);
-};
-
-export const normalizeWalletAddress = (value: unknown, chainType: WalletChainType = "any") => {
+export const normalizeWalletAddress = (value: unknown) => {
   if (typeof value !== "string") return null;
   const normalized = value.trim().toLowerCase();
-  return isValidWalletAddress(normalized, chainType) ? normalized : null;
+  return walletAddressRegex.test(normalized) ? normalized : null;
 };
 
 export const createWalletNonce = () => randomBytes(32).toString("hex");
 
 export const encodeWalletSession = (address: string) => {
-  const normalized = normalizeWalletAddress(address, "any");
+  const normalized = normalizeWalletAddress(address);
   if (!normalized) return null;
   const ttlSeconds = toPositiveInt(
     process.env.WALLET_SESSION_TTL_SECONDS,
@@ -74,7 +60,7 @@ export const decodeWalletSession = (token: string | undefined | null) => {
   const parts = token.split(".");
   if (parts.length !== 3) return null;
   const [address, expiresAtRaw, signature] = parts;
-  const normalized = normalizeWalletAddress(address, "any");
+  const normalized = normalizeWalletAddress(address);
   if (!normalized) return null;
   const expiresAt = Number(expiresAtRaw);
   if (!Number.isFinite(expiresAt) || expiresAt <= 0) return null;

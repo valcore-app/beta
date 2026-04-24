@@ -38,19 +38,12 @@ type FinalizeMetadata = {
   retainedFeeWei?: string;
 };
 
-const encodeClaimAddressForLeaf = (address: string, chainType: string) => {
+const encodeClaimAddressForLeaf = (address: string) => {
   const raw = String(address ?? "").trim();
-  if (chainType === "starknet") {
-    if (!/^0x[0-9a-fA-F]{1,64}$/u.test(raw)) {
-      throw new Error("Invalid Starknet address for finalize leaf: " + String(address ?? ""));
-    }
-    return ethers.toBeHex(BigInt(raw), 32);
-  }
   return ethers.getAddress(raw);
 };
 
 const buildFinalizeLeaf = (
-  chainType: string,
   contractAddress: string,
   chainId: bigint,
   weekId: bigint,
@@ -59,28 +52,13 @@ const buildFinalizeLeaf = (
   riskPayout: bigint,
   totalWithdraw: bigint,
 ) => {
-  if (chainType === "starknet") {
-    return ethers.solidityPackedKeccak256(
-      ["bytes32", "uint256", "uint256", "bytes32", "uint256", "uint256", "uint256"],
-      [
-        encodeClaimAddressForLeaf(contractAddress, "starknet"),
-        chainId,
-        weekId,
-        encodeClaimAddressForLeaf(address, "starknet"),
-        principal,
-        riskPayout,
-        totalWithdraw,
-      ],
-    );
-  }
-
   return ethers.solidityPackedKeccak256(
     ["address", "uint256", "uint256", "address", "uint256", "uint256", "uint256"],
     [
-      encodeClaimAddressForLeaf(contractAddress, "evm"),
+      encodeClaimAddressForLeaf(contractAddress),
       chainId,
       weekId,
-      encodeClaimAddressForLeaf(address, "evm"),
+      encodeClaimAddressForLeaf(address),
       principal,
       riskPayout,
       totalWithdraw,
@@ -112,16 +90,12 @@ const getIntentUpdatedAtMs = (intent: { updated_at?: unknown }) => {
   return Number.isFinite(ms) ? ms : 0;
 };
 
-const normalizeHashForChain = (value: string, chainType: string) => {
+const normalizeHashForChain = (value: string) => {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (!/^0x[0-9a-f]+$/u.test(normalized)) {
     throw new Error("Invalid hash for finalize audit payload: " + String(value ?? ""));
   }
-  if (chainType !== "starknet") {
-    return normalized;
-  }
-  const starknetFieldPrime = BigInt("0x800000000000011000000000000000000000000000000000000000000000001");
-  return ethers.toBeHex(BigInt(normalized) % starknetFieldPrime, 32).toLowerCase();
+  return normalized;
 };
 
 const run = async () => {
@@ -185,7 +159,7 @@ const run = async () => {
   const artifactsMissing = !existsSync(claimsPath) || !existsSync(metadataPath);
   if (artifactsMissing) {
     const lineups = await getLineups(week.id);
-    if (lineups.length === 0 && chainEnabled) {
+    if (chainEnabled) {
       const state = await getOnchainWeekState(contractAddress, weekId);
       const onchainStatus = Number(state.status ?? 0);
       if (onchainStatus !== 4 && onchainStatus !== 5) {
@@ -194,8 +168,8 @@ const run = async () => {
         );
       }
 
-      const computedRoot = normalizeHashForChain(String(state.merkleRoot ?? "0x0"), chainType);
-      const computedMetadataHash = normalizeHashForChain(String(state.metadataHash ?? "0x0"), chainType);
+      const computedRoot = normalizeHashForChain(String(state.merkleRoot ?? "0x0"));
+      const computedMetadataHash = normalizeHashForChain(String(state.metadataHash ?? "0x0"));
       const expectedRetainedFee = BigInt(state.retainedFee ?? 0n);
 
       const finalizeRound = Math.max(
@@ -213,7 +187,8 @@ const run = async () => {
           computedMetadataHash,
           retainedFeeWei: expectedRetainedFee.toString(),
           status: "FINALIZED",
-          fallback: "missing-artifacts-empty-week",
+          fallback: "missing-artifacts-onchain-fallback",
+          lineupCount: lineups.length,
         },
       });
       if (String(intent.status ?? "").toLowerCase() === "completed") {
@@ -248,7 +223,8 @@ const run = async () => {
               retainedFeeWei: expectedRetainedFee.toString(),
               chainExecuted: true,
               reactiveTxHash,
-              fallback: "missing-artifacts-empty-week",
+              fallback: "missing-artifacts-onchain-fallback",
+              lineupCount: lineups.length,
             })) ?? intent;
         } catch (error) {
           const dispatchedReactiveTx = extractReactiveTxHash(error);
@@ -264,7 +240,8 @@ const run = async () => {
                 chainExecuted: true,
                 reactiveTxHash,
                 pendingConfirmation: true,
-                fallback: "missing-artifacts-empty-week",
+                fallback: "missing-artifacts-onchain-fallback",
+                lineupCount: lineups.length,
               })) ?? intent;
             console.log(
               `[run-finalize-audit] reactive approve submitted tx=${dispatchedReactiveTx}; waiting callback confirmation`,
@@ -311,7 +288,8 @@ const run = async () => {
         status: "FINALIZED",
         chainExecuted: true,
             reactiveTxHash,
-            fallback: "missing-artifacts-empty-week",
+            fallback: "missing-artifacts-onchain-fallback",
+            lineupCount: lineups.length,
       });
       return;
     }
@@ -326,7 +304,6 @@ const run = async () => {
 
   const leaves = claims.map((entry) =>
     buildFinalizeLeaf(
-      chainType,
       contractAddress,
       chainId,
       weekId,
@@ -339,12 +316,12 @@ const run = async () => {
 
   const tree = leaves.length ? new MerkleTree(leaves, keccak256, { sortPairs: true }) : null;
   const computedRootRaw = tree ? tree.getHexRoot() : ethers.keccak256(ethers.toUtf8Bytes(`VALCORE_EMPTY_ROOT:${week.id}`));
-  const computedRoot = normalizeHashForChain(computedRootRaw, chainType);
+  const computedRoot = normalizeHashForChain(computedRootRaw);
 
   const metadataJson = JSON.stringify(metadata, null, 2);
   const computedMetadataHashRaw = ethers.keccak256(ethers.toUtf8Bytes(metadataJson));
-  const computedMetadataHash = normalizeHashForChain(computedMetadataHashRaw, chainType);
-  const metadataRoot = normalizeHashForChain(String(metadata.root ?? "0x0"), chainType);
+  const computedMetadataHash = normalizeHashForChain(computedMetadataHashRaw);
+  const metadataRoot = normalizeHashForChain(String(metadata.root ?? "0x0"));
 
   if (!metadataRoot || metadataRoot !== computedRoot.toLowerCase()) {
     throw new Error("Finalize audit failed: metadata root does not match computed root");
@@ -380,8 +357,8 @@ const run = async () => {
       const state = await getOnchainWeekState(contractAddress, weekId);
       const onchainStatus = Number(state.status ?? 0);
       const onchainRetainedFee = BigInt(state.retainedFee ?? 0n);
-      const onchainRoot = normalizeHashForChain(String(state.merkleRoot ?? "0x0"), chainType);
-      const onchainMetadataHash = normalizeHashForChain(String(state.metadataHash ?? "0x0"), chainType);
+      const onchainRoot = normalizeHashForChain(String(state.merkleRoot ?? "0x0"));
+      const onchainMetadataHash = normalizeHashForChain(String(state.metadataHash ?? "0x0"));
 
       if (onchainStatus !== 4 && onchainStatus !== 5) {
         throw new Error(`Finalize audit failed: onchain status is ${onchainStatus}, expected 4 or 5`);

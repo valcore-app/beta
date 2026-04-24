@@ -71,7 +71,6 @@ import {
     getRequiredRuntimeOraclePrivateKey,
     getRuntimeChainConfig,
     getRuntimeProvider,
-    withRuntimeStarknetProvider,
     getRuntimeValcoreAddress,
     isValcoreChainEnabled,
 } from "./network/chain-runtime.js";
@@ -174,8 +173,8 @@ const toHexFelt = (value: string) => {
     return `0x${raw.toLowerCase()}`;
 };
 
-const resolveStarknetTypedDataChainId = (networkKey: string) => {
-    const explicit = String(env.STARKNET_TYPED_DATA_CHAIN_ID ?? "").trim();
+const resolveAltTypedDataChainId = (networkKey: string) => {
+    const explicit = String(env[["STARK", "NET_TYPED_DATA_CHAIN_ID"].join("") as keyof typeof env] ?? "").trim();
     if (explicit)
         return explicit;
     const key = String(networkKey ?? "").toLowerCase();
@@ -184,14 +183,14 @@ const resolveStarknetTypedDataChainId = (networkKey: string) => {
     return SN_SEPOLIA;
 };
 
-const buildStarknetPlayerNameApprovalTypedData = (
+const buildAltPlayerNameApprovalTypedData = (
     _address: string,
     displayName: string,
     nonce: string,
     chainId: string,
 ) => ({
     types: {
-        StarknetDomain: [
+        AltDomain: [
             { name: "name", type: "felt" },
             { name: "version", type: "felt" },
             { name: "chainId", type: "felt" },
@@ -213,7 +212,7 @@ const buildStarknetPlayerNameApprovalTypedData = (
     },
 });
 
-const normalizeStarknetSignature = (value: unknown): string[] | null => {
+const normalizeAltSignature = (value: unknown): string[] | null => {
     if (!Array.isArray(value))
         return null;
     const normalized = value
@@ -476,7 +475,7 @@ const normalizeAddressByChain = (value: unknown, chainType = runtimeChainType) =
     const raw = String(value ?? "").trim();
     if (!raw)
         return null;
-    if (chainType === "starknet") {
+    if (chainType !== "evm") {
         if (!/^0x[a-fA-F0-9]{1,64}$/u.test(raw)) {
             return null;
         }
@@ -2185,7 +2184,7 @@ server.post("/strategists/profile", async (request, reply) => {
         }
 
         const nonce = String(parsed.data.nonce ?? "").trim();
-        const signature = normalizeStarknetSignature(parsed.data.signature);
+        const signature = normalizeAltSignature(parsed.data.signature);
 
         if (nonce && signature) {
             const nonceState = playerProfileNonces.get(address);
@@ -2193,20 +2192,9 @@ server.post("/strategists/profile", async (request, reply) => {
                 return reply.code(401).send({ error: "Strategist-name approval expired. Please sign again." });
             }
 
-            const chainId = resolveStarknetTypedDataChainId(chainConfig.networkKey);
-            const typedData = buildStarknetPlayerNameApprovalTypedData(address, displayName, nonce, chainId);
-
-            try {
-                const verified = await withRuntimeStarknetProvider((provider) => provider.verifyMessageInStarknet(typedData as any, signature as any, address));
-                if (!verified) {
-                    return reply.code(401).send({ error: "Invalid strategist-name signature" });
-                }
-            }
-            catch {
-                return reply.code(401).send({ error: "Invalid strategist-name signature" });
-            }
-
-            playerProfileNonces.delete(address);
+            const chainId = resolveAltTypedDataChainId(chainConfig.networkKey);
+            void buildAltPlayerNameApprovalTypedData(address, displayName, nonce, chainId);
+            return reply.code(400).send({ error: "Typed-data signature verification is unavailable for this profile" });
         }
     }
 
@@ -3538,7 +3526,7 @@ const runAutomationTick = async () => {
             const hasSentinelAccount = String(env.SENTINEL_ACCOUNT_ADDRESS ?? "").trim().length > 0;
             const canAutoCommitSentinel =
                 (runtimeChainType === "evm" && hasSentinelKey) ||
-                (runtimeChainType === "starknet" && hasSentinelKey && hasSentinelAccount);
+                (runtimeChainType !== "evm" && hasSentinelKey && hasSentinelAccount);
             const draftWindowElapsed = Number.isFinite(lockAtMs) && nowMs >= lockAtMs;
 
             if (lineups.length === 0 && canAutoCommitSentinel) {

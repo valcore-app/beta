@@ -22,24 +22,6 @@ const getExpectedHost = (request: NextRequest) => {
   return request.nextUrl.host;
 };
 
-const getChainType = () =>
-  String(process.env.CHAIN_TYPE ?? "evm").trim().toLowerCase() === "starknet" ? "starknet" : "evm";
-
-type SessionPayload = {
-  message?: string;
-  signature?: string;
-  address?: string;
-  nonce?: string;
-};
-
-const shouldUseStarknetFlow = (payload: SessionPayload, configuredChainType: "evm" | "starknet") => {
-  const hasEvmFields = Boolean(payload.message) || Boolean(payload.signature);
-  const hasStarkFields = Boolean(payload.address) || Boolean(payload.nonce);
-  if (hasEvmFields) return false;
-  if (hasStarkFields) return true;
-  return configuredChainType === "starknet";
-};
-
 const buildAllowedHosts = (request: NextRequest) => {
   const allowed = new Set<string>();
   const push = (value: string | null | undefined) => {
@@ -109,34 +91,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Missing nonce" }, { status: 401 });
   }
 
-  let payload: SessionPayload = {};
+  let payload: { message?: string; signature?: string } = {};
   try {
-    payload = (await request.json()) as SessionPayload;
+    payload = (await request.json()) as { message?: string; signature?: string };
   } catch {
     return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
-  }
-
-  const configuredChainType = getChainType();
-  if (shouldUseStarknetFlow(payload, configuredChainType)) {
-    const normalizedAddress = normalizeWalletAddress(payload.address ?? "", "starknet");
-    const bodyNonce = String(payload.nonce ?? "").trim();
-
-    if (!normalizedAddress) {
-      return NextResponse.json({ error: "Invalid address" }, { status: 400 });
-    }
-    if (!bodyNonce || bodyNonce !== nonce) {
-      return NextResponse.json({ error: "Invalid nonce" }, { status: 401 });
-    }
-
-    const token = encodeWalletSession(normalizedAddress);
-    if (!token) {
-      return NextResponse.json({ error: "Session encode failed" }, { status: 500 });
-    }
-
-    const response = NextResponse.json({ ok: true, walletAddress: normalizedAddress });
-    response.cookies.set(WALLET_SESSION_COOKIE, token, walletSessionCookieOptions());
-    response.cookies.set(WALLET_NONCE_COOKIE, "", { ...walletNonceCookieOptions(), maxAge: 0 });
-    return response;
   }
 
   const message = payload.message ?? "";
@@ -164,7 +123,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Signature verification failed" }, { status: 401 });
   }
 
-  const verifiedAddress = normalizeWalletAddress(verifyResult.data?.address ?? "", "evm");
+  const verifiedAddress = normalizeWalletAddress(verifyResult.data?.address ?? "");
   if (!verifyResult.success || !verifiedAddress) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

@@ -68,17 +68,16 @@ const EnvSchema = z.object({
   FAUCET_MINTER_ACCOUNT_ADDRESS: z.string().optional(),
   AUDITOR_PRIVATE_KEY: z.string().optional(),
   AUDITOR_ACCOUNT_ADDRESS: z.string().optional(),
+  AUDITOR_ADDRESS: z.string().optional(),
+  DEPLOYER_PRIVATE_KEY: z.string().optional(),
+  DEPLOYER_ACCOUNT_ADDRESS: z.string().optional(),
+  TREASURY_PRIVATE_KEY: z.string().optional(),
   SENTINEL_PRIVATE_KEY: z.string().optional(),
   SENTINEL_ACCOUNT_ADDRESS: z.string().optional(),
   SENTINEL_STABLECOIN_DEPOSIT: z.string().default("120"),
   CHAIN_GAS_BANK_PRIVATE_KEY: z.string().optional(),
   CHAIN_GAS_MIN_BALANCE_ETH: z.string().default("0.02"),
   CHAIN_GAS_BANK_TOPUP_ETH: z.string().default("0.3"),
-  AUDITOR_ADDRESS: z.string().optional(),
-  STARKNET_TYPED_DATA_CHAIN_ID: z.string().optional(),
-  DEPLOYER_PRIVATE_KEY: z.string().optional(),
-  DEPLOYER_ACCOUNT_ADDRESS: z.string().optional(),
-  TREASURY_PRIVATE_KEY: z.string().optional(),
 
   PRINCIPAL_RATIO_BPS: z.string().default("8000"),
   PROTOCOL_FEE_BPS: z.string().default("1000"),
@@ -88,7 +87,7 @@ const EnvSchema = z.object({
   DRAFT_OPEN_HOURS: z.string().default("23"),
   WEEK_DURATION_DAYS: z.string().default("6"),
   COOLDOWN_HOURS: z.string().default("1"),
-  AUTOMATION_MODE: z.string().default("CRON"),
+  AUTOMATION_MODE: z.string().default("REACTIVE"),
   AUTOMATION_TICK_MS: z.string().default("15000"),
   AUTOMATION_REACTIVE_AUTO_AUDIT: z.string().default("true"),
   REACTIVE_STALL_GRACE_SECONDS: z.string().default("120"),
@@ -128,11 +127,8 @@ const EnvSchema = z.object({
   ERROR_ALERT_COOLDOWN_MINUTES: z.string().default("15"),
   ERROR_ALERT_WEBHOOK_URL: z.string().optional(),
   ERROR_ALERT_WEBHOOK_API_KEY: z.string().optional(),
-  ERROR_ALERT_STARKNET_WEBHOOK_URL: z.string().optional(),
-  ERROR_ALERT_STARKNET_WEBHOOK_API_KEY: z.string().optional(),
   ERROR_ALERT_TELEGRAM_BOT_TOKEN: z.string().optional(),
   ERROR_ALERT_TELEGRAM_CHAT_ID: z.string().optional(),
-  ERROR_ALERT_STARKNET_TELEGRAM_CHAT_ID: z.string().optional(),
 
   SELF_HEAL_POLL_MS: z.string().default("5000"),
   SELF_HEAL_BATCH_SIZE: z.string().default("5"),
@@ -152,6 +148,7 @@ const EnvSchema = z.object({
 });
 
 export const env = EnvSchema.parse(process.env);
+
 
 
 

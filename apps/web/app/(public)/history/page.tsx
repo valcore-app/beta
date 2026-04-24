@@ -4,16 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatUnits, type WalletClient } from "viem";
 import { apiGet } from "../../../lib/api";
-import { reportClientError } from "../../../lib/error-report";
 import { valcoreAbi } from "../../../lib/contracts";
 import { useWallet } from "../../../lib/wallet";
 import { buildChain } from "../../../lib/chain";
 import { useRuntimeProfile } from "../../../lib/runtime-profile";
-import {
-  claimStarknetWeek,
-  readStarknetPosition,
-  waitForStarknetTx,
-} from "../../../lib/starknet-chain";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../../components/ui/card";
 
@@ -74,16 +68,6 @@ const formatWeekStartUtc = (iso?: string | null) => {
     timeZone: "UTC",
   });
 };
-
-const toEvmPublicClient = (client: unknown) =>
-  client as
-    | {
-        readContract: (args: unknown) => Promise<unknown>;
-        getTransactionCount: (args: unknown) => Promise<unknown>;
-        waitForTransactionReceipt: (args: unknown) => Promise<unknown>;
-      }
-    | null;
-
 
 
 const formatStableAmount = (wei?: string | null, decimals = 18) => {
@@ -148,20 +132,17 @@ export default function HistoryPage() {
     ],
   );
   const stablecoinDecimals = profile.stablecoinDecimals || 18;
-  const isStarknet = profile.chainType.toLowerCase() === "starknet";
   const router = useRouter();
   const {
     address,
     status,
     isConnected,
+    connect,
     ensureChain,
     getWalletClient,
-    getStarknetWallet,
     publicClient,
+    hasProvider,
     isCorrectNetwork,
-    walletAuthStatus,
-    walletSessionAddress,
-    walletSessionResolved,
   } = useWallet();
 
   const [weeks, setWeeks] = useState<WeekSummary[]>([]);
@@ -218,80 +199,48 @@ export default function HistoryPage() {
   }
 
   const finalizedWeeks = weeks.filter((week) => week.status === "FINALIZED");
-  const evmPublicClient = toEvmPublicClient(publicClient);
   if (!finalizedWeeks.length) {
     setRows({});
     return;
   }
 
-  try {
-    const nextRows: Record<string, ClaimRowState> = {};
+  const nextRows: Record<string, ClaimRowState> = {};
 
-    await Promise.all(
-      finalizedWeeks.map(async (week) => {
-        try {
-          const claim = await apiGet<ClaimData>(`/weeks/${week.id}/claims/${address.toLowerCase()}`);
-          let claimedOnChain = false;
+  await Promise.all(
+    finalizedWeeks.map(async (week) => {
+      try {
+        const claim = await apiGet<ClaimData>(`/weeks/${week.id}/claims/${address.toLowerCase()}`);
+        let claimedOnChain = false;
 
-          if (valcoreAddress) {
-            try {
-              if (isStarknet) {
-                const position = await readStarknetPosition(profile.rpcUrl, valcoreAddress, week.id, address);
-                claimedOnChain = position.claimed;
-              } else if (evmPublicClient) {
-                const position = await evmPublicClient.readContract({
-                  address: valcoreAddress,
-                  abi: valcoreAbi,
-                  functionName: "positions",
-                  args: [BigInt(week.id), address as `0x${string}`],
-                });
-                claimedOnChain = parseClaimedFlag(position);
-              }
-            } catch (error) {
-              const detail = error instanceof Error ? error.message : String(error ?? "unknown");
-              throw new Error(`On-chain claim status read failed for week ${week.id}: ${detail}`);
-            }
+        if (publicClient && valcoreAddress) {
+          try {
+            const position = await publicClient.readContract({
+              address: valcoreAddress,
+              abi: valcoreAbi,
+              functionName: "positions",
+              args: [BigInt(week.id), address as `0x${string}`],
+            });
+            claimedOnChain = parseClaimedFlag(position);
+          } catch {
+            claimedOnChain = false;
           }
-
-          nextRows[week.id] = {
-            loading: false,
-            pending: false,
-            claim,
-            claimedOnChain,
-            error: null,
-          };
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error ?? "");
-          if (message.toLowerCase().includes("on-chain claim status read failed")) {
-            throw error;
-          }
-          // Not participating in this week -> excluded from history list.
         }
-      }),
-    );
 
-    setRows(nextRows);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to sync claim history.";
-    setRows({});
-    setNotice({ tone: "warn", text: "On-chain claim status unavailable. Refresh and retry." });
-    void reportClientError({
-      source: "web-client",
-      severity: "error",
-      category: "history-claim-sync",
-      message: "History claim sync failed",
-      fingerprint: "history:claims:sync-failed",
-      path: window.location.pathname,
-      walletAddress: address,
-      context: {
-        weekCount: finalizedWeeks.length,
-        rpcUrl: profile.rpcUrl,
-        valcoreAddress,
-        rawError: message,
-      },
-    });
-  }
-}, [address, isStarknet, profile.rpcUrl, publicClient, valcoreAddress, weeks]);
+        nextRows[week.id] = {
+          loading: false,
+          pending: false,
+          claim,
+          claimedOnChain,
+          error: null,
+        };
+      } catch {
+        // Not participating in this week -> excluded from history list.
+      }
+    }),
+  );
+
+  setRows(nextRows);
+}, [address, publicClient, valcoreAddress, weeks]);
 
 useEffect(() => {
   void refreshClaims();
@@ -358,180 +307,141 @@ useEffect(() => {
         return false;
       }
 
-      let hash: `0x${string}` | null = null;
-      const evmPublicClient = toEvmPublicClient(publicClient);
+      const walletClient = getWalletClient() as WalletClient | null;
+      if (!walletClient) {
+        setNotice({ tone: "warn", text: "Wallet signer not available." });
+        return false;
+      }
+
+      const normalizeAddress = (value: unknown): `0x${string}` | null => {
+        const text = String(value ?? "").trim();
+        if (!/^0x[a-fA-F0-9]{40}$/u.test(text)) return null;
+        return text as `0x${string}`;
+      };
+
+      let txAccount = normalizeAddress(walletClient.account?.address) ?? normalizeAddress(address);
+      if (!txAccount) {
+        try {
+          const listed = await walletClient.request({ method: "eth_accounts" });
+          if (Array.isArray(listed) && listed.length > 0) {
+            txAccount = normalizeAddress(listed[0]);
+          }
+        } catch {
+          txAccount = null;
+        }
+      }
+      if (!txAccount) {
+        setNotice({ tone: "warn", text: "Wallet account unavailable. Reconnect wallet and retry." });
+        return false;
+      }
+
       setRow(weekId, { pending: true, error: null });
       try {
-
-        if (isStarknet) {
-          const starknetWallet = getStarknetWallet();
-          if (!starknetWallet) {
-            setRow(weekId, { pending: false, error: "Starknet wallet signer not available." });
-            setNotice({ tone: "warn", text: "Starknet wallet signer not available." });
-            return false;
-          }
-
-          hash = await claimStarknetWeek(
-            starknetWallet,
-            valcoreAddress,
-            weekId,
+        const request = {
+          address: valcoreAddress,
+          abi: valcoreAbi,
+          functionName: "claim",
+          args: [
+            BigInt(weekId),
             BigInt(row.claim.principal),
             BigInt(row.claim.riskPayout),
             BigInt(row.claim.totalWithdraw),
             row.claim.proof,
-          );
-          await waitForStarknetTx(profile.rpcUrl, hash);
-        } else {
-          const walletClient = getWalletClient() as WalletClient | null;
-          if (!walletClient) {
-            setRow(weekId, { pending: false, error: "Wallet signer not available." });
-            setNotice({ tone: "warn", text: "Wallet signer not available." });
-            return false;
+          ],
+          chain: activeChain,
+          account: txAccount,
+        };
+
+        let hash: `0x${string}`;
+        try {
+          hash = await walletClient.writeContract(request);
+        } catch (firstError) {
+          const message = firstError instanceof Error ? firstError.message.toLowerCase() : "";
+          const shouldRetryWithNonce =
+            message.includes("unable to calculate nonce") ||
+            message.includes("nonce") ||
+            message.includes("unable to get transaction hash");
+
+          if (!shouldRetryWithNonce) {
+            throw firstError;
           }
 
-          const normalizeAddress = (value: unknown): `0x${string}` | null => {
-            const text = String(value ?? "").trim();
-            if (!/^0x[a-fA-F0-9]{40}$/u.test(text)) return null;
-            return text as `0x${string}`;
-          };
-
-          let txAccount = normalizeAddress(walletClient.account?.address) ?? normalizeAddress(address);
-          if (!txAccount) {
-            try {
-              const listed = await walletClient.request({ method: "eth_accounts" });
-              if (Array.isArray(listed) && listed.length > 0) {
-                txAccount = normalizeAddress(listed[0]);
-              }
-            } catch {
-              txAccount = null;
+          const parseNonce = (value: unknown): number | null => {
+            if (typeof value === "number") {
+              if (!Number.isFinite(value) || value < 0) return null;
+              return Math.floor(value);
             }
-          }
-          if (!txAccount) {
-            setRow(weekId, { pending: false, error: "Wallet account unavailable." });
-            setNotice({ tone: "warn", text: "Wallet account unavailable. Reconnect wallet and retry." });
-            return false;
-          }
-
-          const request = {
-            address: valcoreAddress,
-            abi: valcoreAbi,
-            functionName: "claim",
-            args: [
-              BigInt(weekId),
-              BigInt(row.claim.principal),
-              BigInt(row.claim.riskPayout),
-              BigInt(row.claim.totalWithdraw),
-              row.claim.proof,
-            ],
-            chain: activeChain,
-            account: txAccount,
+            if (typeof value === "bigint") {
+              if (value < 0n) return null;
+              return Number(value);
+            }
+            if (typeof value === "string") {
+              const raw = value.trim();
+              if (!raw) return null;
+              const parsed = raw.startsWith("0x") ? Number.parseInt(raw, 16) : Number(raw);
+              if (!Number.isFinite(parsed) || parsed < 0) return null;
+              return Math.floor(parsed);
+            }
+            return null;
           };
 
+          let nonce: number | null = null;
           try {
-            hash = await walletClient.writeContract(request);
-          } catch (firstError) {
-            const message = firstError instanceof Error ? firstError.message.toLowerCase() : "";
-            const shouldRetryWithNonce =
-              message.includes("unable to calculate nonce") ||
-              message.includes("nonce") ||
-              message.includes("unable to get transaction hash");
+            const nonceRaw = await (walletClient as any).request({
+              method: "eth_getTransactionCount",
+              params: [txAccount, "pending"],
+            });
+            nonce = parseNonce(nonceRaw);
+          } catch {
+            nonce = null;
+          }
 
-            if (!shouldRetryWithNonce) {
-              throw firstError;
-            }
-
-            const parseNonce = (value: unknown): number | null => {
-              if (typeof value === "number") {
-                if (!Number.isFinite(value) || value < 0) return null;
-                return Math.floor(value);
-              }
-              if (typeof value === "bigint") {
-                if (value < 0n) return null;
-                return Number(value);
-              }
-              if (typeof value === "string") {
-                const raw = value.trim();
-                if (!raw) return null;
-                const parsed = raw.startsWith("0x") ? Number.parseInt(raw, 16) : Number(raw);
-                if (!Number.isFinite(parsed) || parsed < 0) return null;
-                return Math.floor(parsed);
-              }
-              return null;
-            };
-
-            let nonce: number | null = null;
+          if (nonce === null && publicClient) {
             try {
-              const nonceRaw = await (walletClient as any).request({
-                method: "eth_getTransactionCount",
-                params: [txAccount, "pending"],
+              const nonceValue = await publicClient.getTransactionCount({
+                address: txAccount,
+                blockTag: "pending",
               });
-              nonce = parseNonce(nonceRaw);
+              nonce = parseNonce(nonceValue);
             } catch {
               nonce = null;
             }
-
-            if (nonce === null && evmPublicClient) {
-              try {
-                const nonceValue = await evmPublicClient.getTransactionCount({
-                  address: txAccount,
-                  blockTag: "pending",
-                });
-                nonce = parseNonce(nonceValue);
-              } catch {
-                nonce = null;
-              }
-            }
-
-            if (nonce === null) {
-              throw firstError;
-            }
-
-            hash = await walletClient.writeContract({
-              ...request,
-              nonce,
-            });
           }
 
-          if (evmPublicClient) {
-            await evmPublicClient.waitForTransactionReceipt({ hash });
+          if (nonce === null) {
+            throw firstError;
           }
+
+          hash = await walletClient.writeContract({
+            ...request,
+            nonce,
+          });
         }
 
-        const confirmedHash = hash as `0x${string}`;
+        if (publicClient) {
+          await publicClient.waitForTransactionReceipt({ hash });
+        }
+
         setRow(weekId, {
           pending: false,
           claimedOnChain: true,
-          txHash: confirmedHash,
+          txHash: hash,
           claimedAt: new Date().toISOString(),
           error: null,
         });
         setNotice({
           tone: "info",
-          text: `Claim success for week ${weekId}. Tx: ${confirmedHash.slice(0, 10)}...${confirmedHash.slice(-8)}`,
+          text: `Claim success for week ${weekId}. Tx: ${hash.slice(0, 10)}...${hash.slice(-8)}`,
         });
         return true;
       } catch (error) {
         const message = error instanceof Error ? error.message : "Claim failed.";
-
         setRow(weekId, { pending: false, error: message });
         setNotice({ tone: "warn", text: `Claim failed for week ${weekId}.` });
         return false;
       }
     },
-    [
-      activeChain,
-      address,
-      ensureChain,
-      getStarknetWallet,
-      getWalletClient,
-      isStarknet,
-      profile.label,
-      profile.rpcUrl,
-      publicClient,
-      rows,
-      setRow,
-      valcoreAddress,
-    ],
+    [address, ensureChain, getWalletClient, publicClient, rows, setRow],
   );
 
   const claimAll = useCallback(async () => {
@@ -561,31 +471,11 @@ useEffect(() => {
   };
 
   useEffect(() => {
-    if (status === "connecting" || !walletSessionResolved) return;
-
-    // Redirect only when we are certain there is no active user context.
-    const hasAnyUserContext = Boolean(address || isConnected || walletSessionAddress);
-    const authStillResolving = walletAuthStatus === "signing" || walletAuthStatus === "authenticated";
-    if (hasAnyUserContext || authStillResolving) return;
-
-    const redirectTimer = window.setTimeout(() => {
-      const stillNoUser = !address && !isConnected && !walletSessionAddress;
-      const stillIdle = status === "idle";
-      if (stillNoUser && stillIdle) {
-        router.replace("/strategy");
-      }
-    }, 1200);
-
-    return () => window.clearTimeout(redirectTimer);
-  }, [
-    address,
-    isConnected,
-    router,
-    status,
-    walletAuthStatus,
-    walletSessionAddress,
-    walletSessionResolved,
-  ]);
+    if (status === "connecting") return;
+    if (!isConnected || !address) {
+      router.replace("/lineup");
+    }
+  }, [address, isConnected, router, status]);
 
   return (
     <main id="claim-center" className="vc-page">
@@ -657,7 +547,7 @@ useEffect(() => {
 
 {rowsView.length === 0 ? (
           <div className="rounded-xl border border-[color:var(--arena-stroke)] bg-[color:var(--arena-panel-strong)] p-4 text-sm text-[color:var(--arena-muted)]">
-            You have not joined any finalized week yet. Your claim history will appear here after you participate.
+            You have not joined any finalized week yet. Your claim history will appear here after you play.
           </div>
         ) : (
         <Card className="arena-panel-strong rounded-[20px]">
@@ -762,7 +652,4 @@ useEffect(() => {
     </main>
   );
 }
-
-
-
 

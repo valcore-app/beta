@@ -2,12 +2,9 @@ import { ethers } from "ethers";
 import { getCoins, getLineupByAddress, getWeekCoins } from "../store.js";
 import {
   getRequiredRuntimeValcoreAddress,
-  getRuntimeChainConfig,
   getRuntimeProvider,
-  withRuntimeStarknetProvider,
   isValcoreChainEnabled,
 } from "../network/chain-runtime.js";
-import { getOnchainPosition, isOnchainTxSuccessful } from "../network/valcore-chain-client.js";
 
 export type SyncSource = "commit" | "swap";
 
@@ -42,11 +39,9 @@ export type VerifiedLineupSync = {
   stale: boolean;
 };
 
+const BPS = 10_000n;
 const SALARY_CAP = 100_000;
 const ALLOWED_FORMATION_KEYS = new Set(["1-4-4-2", "1-4-3-3", "1-3-4-3"]);
-const STARKNET_FIELD_PRIME = BigInt(
-  "0x800000000000011000000000000000000000000000000000000000000000001",
-);
 
 const roleToPosition = {
   core: "GK",
@@ -68,66 +63,18 @@ const iface = new ethers.Interface(LINEUP_ABI);
 const deterministic = (message: string) => new Error(`DETERMINISTIC: ${message}`);
 const transient = (message: string) => new Error(`TRANSIENT: ${message}`);
 
-const normalizeHash = (value: string, chainType: string) => {
-  let raw = String(value ?? "").trim();
-  if (!raw) throw deterministic("Invalid tx hash");
-
-  if (chainType === "starknet") {
-    if (/^[0-9]+$/u.test(raw)) {
-      raw = `0x${BigInt(raw).toString(16)}`;
-    } else if (/^[0-9a-fA-F]{1,64}$/u.test(raw)) {
-      raw = `0x${raw}`;
-    }
-
-    if (!/^0x[0-9a-fA-F]{1,64}$/u.test(raw)) {
-      throw deterministic("Invalid tx hash");
-    }
-    return raw.toLowerCase();
-  }
-
-  if (!/^0x[a-fA-F0-9]{64}$/u.test(raw)) {
-    throw deterministic("Invalid tx hash");
-  }
-  return raw.toLowerCase();
+const normalizeHash = (value: string) => {
+  if (!/^0x[a-fA-F0-9]{64}$/.test(value)) throw deterministic("Invalid tx hash");
+  return value.toLowerCase();
 };
 
-const normalizeAddressForChain = (value: string, chainType: string) => {
-  const raw = String(value ?? "").trim();
-  if (!raw) return null;
-  if (chainType === "starknet") {
-    if (!/^0x[a-fA-F0-9]{1,64}$/u.test(raw)) return null;
-    return raw.toLowerCase();
-  }
+const getLeagueAddress = async () => {
+  const raw = await getRequiredRuntimeValcoreAddress();
   try {
     return ethers.getAddress(raw).toLowerCase();
   } catch {
-    return null;
-  }
-};
-
-const normalizeFeltHex = (value: unknown) => {
-  const raw = String(value ?? "").trim();
-  if (!raw) return "0x0";
-  try {
-    const asBigInt = BigInt(raw.startsWith("0x") ? raw : `0x${raw}`);
-    return `0x${asBigInt.toString(16)}`;
-  } catch {
-    return raw.toLowerCase();
-  }
-};
-
-const toStarknetFelt = (hashHex: string) => {
-  const value = BigInt(hashHex);
-  return `0x${(value % STARKNET_FIELD_PRIME).toString(16)}`;
-};
-
-const getLeagueAddress = async (chainType: string) => {
-  const raw = await getRequiredRuntimeValcoreAddress();
-  const normalized = normalizeAddressForChain(raw, chainType);
-  if (!normalized) {
     throw deterministic("League contract address is invalid");
   }
-  return normalized;
 };
 
 const normalizeSlots = (slots: LineupSyncSlot[]) => {
@@ -275,88 +222,6 @@ const parseIndexed = (value: unknown) => {
   return String(value ?? "");
 };
 
-const verifyStarknetSync = async (
-  payload: LineupSyncPayload,
-  source: SyncSource,
-  txHash: string,
-): Promise<VerifiedLineupSync> => {
-  const weekId = String(payload.weekIdHint ?? "").trim();
-  if (!weekId) throw deterministic("weekId hint is required for starknet sync");
-
-  const addressHint = String(payload.addressHint ?? "").trim();
-  const address = normalizeAddressForChain(addressHint, "starknet");
-  if (!address) throw deterministic("address hint is required for starknet sync");
-
-  const slots = normalizeSlots(payload.slots ?? []);
-  if (!slots.length) throw deterministic("slots is required");
-  if (source === "swap") {
-    normalizeSwapPayload(payload.swap);
-  }
-
-  await validateLineupBusinessRules(weekId, slots, source, payload.swap);
-
-  const leagueAddress = await getLeagueAddress("starknet");
-
-  const txOk = await isOnchainTxSuccessful(txHash).catch((error) => {
-    const text = error instanceof Error ? error.message : String(error);
-    throw transient(`Unable to verify starknet tx status: ${text}`);
-  });
-  if (!txOk) {
-    throw deterministic(`Starknet transaction failed: ${txHash}`);
-  }
-
-  const starknetTx = await withRuntimeStarknetProvider((provider) => provider.getTransactionByHash(txHash)).catch(() => null);
-  const senderAddress = normalizeAddressForChain(
-    String((starknetTx as { sender_address?: string } | null)?.sender_address ?? ""),
-    "starknet",
-  );
-  if (senderAddress && senderAddress !== address) {
-    throw deterministic("address hint does not match tx sender");
-  }
-
-  const position = await getOnchainPosition(leagueAddress, BigInt(weekId), address).catch((error) => {
-    const text = error instanceof Error ? error.message : String(error);
-    throw transient(`Unable to read starknet position: ${text}`);
-  });
-
-  const principalWei = BigInt(position.principal ?? 0n);
-  const riskWei = BigInt(position.risk ?? 0n);
-  const depositWei = principalWei + riskWei;
-  if (depositWei <= 0n) {
-    throw deterministic("On-chain position not found for provided week/address");
-  }
-
-  const calculatedHash = buildLineupHash(weekId, address, slots);
-  const calculatedFelt = toStarknetFelt(calculatedHash);
-  const onchainHash = normalizeFeltHex(position.lineupHash);
-  const hashMatches =
-    onchainHash === normalizeFeltHex(calculatedHash) || onchainHash === normalizeFeltHex(calculatedFelt);
-  if (!hashMatches) {
-    throw deterministic("Provided slots do not match on-chain lineup hash");
-  }
-
-  let stale = false;
-  const existing = await getLineupByAddress(weekId, address);
-  const existingSwaps = existing ? Number(existing.swaps ?? 0) : 0;
-  const onchainSwaps = Number(position.swaps ?? 0);
-  if (Number.isFinite(existingSwaps) && Number.isFinite(onchainSwaps) && existingSwaps > onchainSwaps) {
-    stale = true;
-  }
-
-  return {
-    weekId,
-    address,
-    lineupHash: onchainHash,
-    depositWei: depositWei.toString(),
-    principalWei: principalWei.toString(),
-    riskWei: riskWei.toString(),
-    swaps: Number.isFinite(onchainSwaps) ? Math.max(0, onchainSwaps) : 0,
-    source,
-    txHash,
-    stale,
-  };
-};
-
 export const verifyLineupSyncPayload = async (
   payload: LineupSyncPayload,
 ): Promise<VerifiedLineupSync> => {
@@ -364,22 +229,15 @@ export const verifyLineupSyncPayload = async (
     throw deterministic("Valcore chain sync is disabled");
   }
 
-  const chainConfig = await getRuntimeChainConfig();
-  const chainType = String(chainConfig.chainType ?? "evm").toLowerCase();
   const source: SyncSource = payload.source ?? "commit";
-  const txHash = normalizeHash(payload.txHash, chainType);
-
-  if (chainType === "starknet") {
-    return verifyStarknetSync(payload, source, txHash);
-  }
-
+  const txHash = normalizeHash(payload.txHash);
   const slots = normalizeSlots(payload.slots ?? []);
   if (!slots.length) throw deterministic("slots is required");
   if (source === "swap") {
     normalizeSwapPayload(payload.swap);
   }
 
-  const leagueAddress = await getLeagueAddress("evm");
+  const leagueAddress = await getLeagueAddress();
   const provider = await getRuntimeProvider();
 
   let receipt: ethers.TransactionReceipt | null = null;
@@ -435,8 +293,10 @@ export const verifyLineupSyncPayload = async (
   }
 
   if (payload.addressHint) {
-    const expectedAddress = normalizeAddressForChain(payload.addressHint, "evm");
-    if (!expectedAddress) {
+    let expectedAddress = "";
+    try {
+      expectedAddress = ethers.getAddress(payload.addressHint).toLowerCase();
+    } catch {
       throw deterministic("address hint is invalid");
     }
     if (expectedAddress !== address) {
@@ -471,7 +331,7 @@ export const verifyLineupSyncPayload = async (
       throw transient(`Unable to read principal ratio: ${text}`);
     }
 
-    principalWei = (eventDeposit * ratio) / 10_000n;
+    principalWei = (eventDeposit * ratio) / BPS;
     riskWei = eventDeposit - principalWei;
     swaps = 0;
 
@@ -482,7 +342,7 @@ export const verifyLineupSyncPayload = async (
         stale = true;
       }
     } catch {
-      // best-effort only
+      // position read is best-effort for staleness, not required for commit sync
     }
   } else {
     const swapsUsed = Number(eventLog.args?.swapsUsed ?? 0);
@@ -544,4 +404,5 @@ export const verifyLineupSyncPayload = async (
     stale,
   };
 };
+
 

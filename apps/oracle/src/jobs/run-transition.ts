@@ -154,7 +154,7 @@ const run = async () => {
   const chainConfig = chainEnabled ? await getRuntimeChainConfig().catch(() => null) : null;
   const runtimeChainType = String(chainConfig?.chainType ?? "").toLowerCase();
   const isReactiveEvm = automationMode === "REACTIVE" && runtimeChainType === "evm";
-  const supportsSentinelAutoCommit = runtimeChainType === "evm" || runtimeChainType === "starknet";
+  const supportsSentinelAutoCommit = runtimeChainType === "evm";
   const leagueAddress = chainEnabled ? await getRuntimeValcoreAddress() : null;
 
   const requiredDbStatus = action === "lock" ? "DRAFT_OPEN" : "LOCKED";
@@ -457,6 +457,5 @@ run().then(() => {
   console.error("Transition job failed:", error);
   process.exit(1);
 });
-
 
 
