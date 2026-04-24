@@ -30,7 +30,6 @@ export const ensureCoinsDirectory = () => {
  */
 export const downloadCoinLogo = async (
   symbol: string,
-  coinId: string,
 ): Promise<string | null> => {
   try {
     const symbolLower = symbol.toLowerCase();

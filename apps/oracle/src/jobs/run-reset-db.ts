@@ -6,10 +6,11 @@ const run = async () => {
     await client.query("TRUNCATE job_runs RESTART IDENTITY CASCADE");
     await client.query("TRUNCATE self_heal_task_runs RESTART IDENTITY CASCADE");
     await client.query("TRUNCATE self_heal_tasks RESTART IDENTITY CASCADE");
+    await client.query("TRUNCATE lifecycle_tx_intents RESTART IDENTITY CASCADE");
   });
 
   console.log(
-    "Database reset: cleared weeks, related tables, job logs, and self-heal tasks. Coins and faucet claims preserved.",
+    "Database reset: cleared weeks, lifecycle intents, related tables, job logs, and self-heal tasks. Coins and faucet claims preserved.",
   );
 };
 

@@ -1,4 +1,4 @@
-﻿import { env } from "../env.js";
+import { env } from "../env.js";
 import {
   getRequiredRuntimeValcoreAddress,
   isValcoreChainEnabled,
@@ -6,7 +6,7 @@ import {
 import { sendSetTestModeOnchain } from "../network/valcore-chain-client.js";
 import { getDerivedTimeMode, isManualAutomationMode, normalizeAutomationMode } from "../admin/automation.js";
 
-const automationMode = normalizeAutomationMode(env.AUTOMATION_MODE);
+const automationMode = normalizeAutomationMode(process.env.AUTOMATION_MODE_EFFECTIVE ?? env.AUTOMATION_MODE);
 const enable = isManualAutomationMode(automationMode);
 const derivedTimeMode = getDerivedTimeMode(automationMode);
 
@@ -23,7 +23,9 @@ const run = async () => {
   console.log(`Test mode set to ${enable} (AUTOMATION_MODE=${automationMode}, derived=${derivedTimeMode}).`);
 };
 
-run().catch((error) => {
+run().then(() => {
+  process.exit(0);
+}).catch((error) => {
   console.error("Time mode job failed:", error);
   process.exit(1);
 });

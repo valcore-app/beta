@@ -1,10 +1,16 @@
 import dotenv from "dotenv";
-import { resolve } from "path";
+import { isAbsolute, resolve } from "path";
 import { fileURLToPath } from "url";
 import { z } from "zod";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
-dotenv.config({ path: resolve(here, "..", "..", "..", ".env") });
+const oracleEnvFile = process.env.ORACLE_ENV_FILE?.trim();
+const oracleEnvPath = oracleEnvFile
+  ? isAbsolute(oracleEnvFile)
+    ? oracleEnvFile
+    : resolve(process.cwd(), oracleEnvFile)
+  : resolve(here, "..", "..", "..", ".env");
+dotenv.config({ path: oracleEnvPath, override: true });
 
 const EnvSchema = z.object({
   ORACLE_PORT: z.string().optional(),
@@ -65,6 +71,9 @@ const EnvSchema = z.object({
   SENTINEL_PRIVATE_KEY: z.string().optional(),
   SENTINEL_ACCOUNT_ADDRESS: z.string().optional(),
   SENTINEL_STABLECOIN_DEPOSIT: z.string().default("120"),
+  CHAIN_GAS_BANK_PRIVATE_KEY: z.string().optional(),
+  CHAIN_GAS_MIN_BALANCE_ETH: z.string().default("0.02"),
+  CHAIN_GAS_BANK_TOPUP_ETH: z.string().default("0.3"),
   AUDITOR_ADDRESS: z.string().optional(),
   STARKNET_TYPED_DATA_CHAIN_ID: z.string().optional(),
   DEPLOYER_PRIVATE_KEY: z.string().optional(),
@@ -82,7 +91,25 @@ const EnvSchema = z.object({
   AUTOMATION_MODE: z.string().default("CRON"),
   AUTOMATION_TICK_MS: z.string().default("15000"),
   AUTOMATION_REACTIVE_AUTO_AUDIT: z.string().default("true"),
+  REACTIVE_STALL_GRACE_SECONDS: z.string().default("120"),
+  REACTIVE_CHAIN_RPC_URL: z.string().default("https://lasna-rpc.rnk.dev"),
+  REACTIVE_CHAIN_ID: z.string().default("5318007"),
+  REACTIVE_EXECUTOR_PRIVATE_KEY: z.string().optional(),
+  REACTIVE_GAS_BANK_PRIVATE_KEY: z.string().optional(),
+  REACTIVE_EXECUTOR_MIN_BALANCE_ETH: z.string().default("0.03"),
+  REACTIVE_GAS_BANK_TOPUP_ETH: z.string().default("3"),
+  REACTIVE_DISPATCHER_DEBT_BUFFER_ETH: z.string().default("0.02"),
+  REACTIVE_DISPATCHER_ADDRESS: z.string().optional(),
+  REACTIVE_RECEIVER_ADDRESS: z.string().optional(),
+  REACTIVE_CALLBACK_SENDER_ADDRESS: z.string().optional(),
+  REACTIVE_CALLBACK_PROXY_ADDRESS: z.string().default("0xc9f36411C9897e7F959D99ffca2a0Ba7ee0D7bDA"),
+  REACTIVE_CALLBACK_GAS_LIMIT: z.string().default("900000"),
+  REACTIVE_DESTINATION_WAIT_MS: z.string().default("240000"),
+  REACTIVE_DESTINATION_POLL_MS: z.string().default("3000"),
+  REACTIVE_STUCK_REDISPATCH_COOLDOWN_MS: z.string().default("300000"),
+  REACTIVE_EXPLORER_URL: z.string().default("https://lasna.reactscan.net"),
   RUN_WEEK_BASE_TIME_MS: z.string().optional(),
+  RUN_WEEK_MIN_LOCK_LEAD_SECONDS: z.string().default("90"),
 
   JOB_RETRY_BASE_MS: z.string().default("5000"),
   JOB_RETRY_MAX_MS: z.string().default("60000"),
@@ -90,6 +117,7 @@ const EnvSchema = z.object({
   JOB_RETRY_MAX_ATTEMPTS: z.string().default("0"),
   JOB_TIMEOUT_MS: z.string().default("0"),
   JOB_RUN_WEEK_TIMEOUT_MS: z.string().default("1200000"),
+  JOB_DB_WRITE_TIMEOUT_MS: z.string().default("5000"),
   JOB_WEBHOOK_URL: z.string().optional(),
   JOB_WEBHOOK_API_KEY: z.string().optional(),
 
@@ -120,9 +148,12 @@ const EnvSchema = z.object({
   CHAIN_TX_FEE_BUMP_BPS: z.string().default("1500"),
   CHAIN_TX_GAS_LIMIT_BUFFER_BPS: z.string().default("2000"),
   CHAIN_TX_CONFIRMATIONS: z.string().default("1"),
+  CHAIN_TX_WAIT_TIMEOUT_MS: z.string().default("180000"),
 });
 
 export const env = EnvSchema.parse(process.env);
+
+
 
 
 

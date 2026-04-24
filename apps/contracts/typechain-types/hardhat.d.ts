@@ -82,9 +82,61 @@ declare module "hardhat/types/runtime" {
       signerOrOptions?: ethers.Signer | FactoryOptions
     ): Promise<Contracts.ReentrancyGuard__factory>;
     getContractFactory(
+      name: "IValcoreLifecycle",
+      signerOrOptions?: ethers.Signer | FactoryOptions
+    ): Promise<Contracts.IValcoreLifecycle__factory>;
+    getContractFactory(
+      name: "AbstractCallback",
+      signerOrOptions?: ethers.Signer | FactoryOptions
+    ): Promise<Contracts.AbstractCallback__factory>;
+    getContractFactory(
+      name: "AbstractPayer",
+      signerOrOptions?: ethers.Signer | FactoryOptions
+    ): Promise<Contracts.AbstractPayer__factory>;
+    getContractFactory(
+      name: "AbstractReactive",
+      signerOrOptions?: ethers.Signer | FactoryOptions
+    ): Promise<Contracts.AbstractReactive__factory>;
+    getContractFactory(
+      name: "IPayable",
+      signerOrOptions?: ethers.Signer | FactoryOptions
+    ): Promise<Contracts.IPayable__factory>;
+    getContractFactory(
+      name: "IPayer",
+      signerOrOptions?: ethers.Signer | FactoryOptions
+    ): Promise<Contracts.IPayer__factory>;
+    getContractFactory(
+      name: "IReactive",
+      signerOrOptions?: ethers.Signer | FactoryOptions
+    ): Promise<Contracts.IReactive__factory>;
+    getContractFactory(
+      name: "ISubscriptionService",
+      signerOrOptions?: ethers.Signer | FactoryOptions
+    ): Promise<Contracts.ISubscriptionService__factory>;
+    getContractFactory(
+      name: "ISystemContract",
+      signerOrOptions?: ethers.Signer | FactoryOptions
+    ): Promise<Contracts.ISystemContract__factory>;
+    getContractFactory(
       name: "StablecoinMock",
       signerOrOptions?: ethers.Signer | FactoryOptions
     ): Promise<Contracts.StablecoinMock__factory>;
+    getContractFactory(
+      name: "IValcoreReactiveTrigger",
+      signerOrOptions?: ethers.Signer | FactoryOptions
+    ): Promise<Contracts.IValcoreReactiveTrigger__factory>;
+    getContractFactory(
+      name: "ValcoreReactiveDispatcher",
+      signerOrOptions?: ethers.Signer | FactoryOptions
+    ): Promise<Contracts.ValcoreReactiveDispatcher__factory>;
+    getContractFactory(
+      name: "ValcoreReactiveReceiver",
+      signerOrOptions?: ethers.Signer | FactoryOptions
+    ): Promise<Contracts.ValcoreReactiveReceiver__factory>;
+    getContractFactory(
+      name: "ValcoreReactiveTrigger",
+      signerOrOptions?: ethers.Signer | FactoryOptions
+    ): Promise<Contracts.ValcoreReactiveTrigger__factory>;
     getContractFactory(
       name: "ValcoreV1",
       signerOrOptions?: ethers.Signer | FactoryOptions
@@ -176,10 +228,75 @@ declare module "hardhat/types/runtime" {
       signer?: ethers.Signer
     ): Promise<Contracts.ReentrancyGuard>;
     getContractAt(
+      name: "IValcoreLifecycle",
+      address: string | ethers.Addressable,
+      signer?: ethers.Signer
+    ): Promise<Contracts.IValcoreLifecycle>;
+    getContractAt(
+      name: "AbstractCallback",
+      address: string | ethers.Addressable,
+      signer?: ethers.Signer
+    ): Promise<Contracts.AbstractCallback>;
+    getContractAt(
+      name: "AbstractPayer",
+      address: string | ethers.Addressable,
+      signer?: ethers.Signer
+    ): Promise<Contracts.AbstractPayer>;
+    getContractAt(
+      name: "AbstractReactive",
+      address: string | ethers.Addressable,
+      signer?: ethers.Signer
+    ): Promise<Contracts.AbstractReactive>;
+    getContractAt(
+      name: "IPayable",
+      address: string | ethers.Addressable,
+      signer?: ethers.Signer
+    ): Promise<Contracts.IPayable>;
+    getContractAt(
+      name: "IPayer",
+      address: string | ethers.Addressable,
+      signer?: ethers.Signer
+    ): Promise<Contracts.IPayer>;
+    getContractAt(
+      name: "IReactive",
+      address: string | ethers.Addressable,
+      signer?: ethers.Signer
+    ): Promise<Contracts.IReactive>;
+    getContractAt(
+      name: "ISubscriptionService",
+      address: string | ethers.Addressable,
+      signer?: ethers.Signer
+    ): Promise<Contracts.ISubscriptionService>;
+    getContractAt(
+      name: "ISystemContract",
+      address: string | ethers.Addressable,
+      signer?: ethers.Signer
+    ): Promise<Contracts.ISystemContract>;
+    getContractAt(
       name: "StablecoinMock",
       address: string | ethers.Addressable,
       signer?: ethers.Signer
     ): Promise<Contracts.StablecoinMock>;
+    getContractAt(
+      name: "IValcoreReactiveTrigger",
+      address: string | ethers.Addressable,
+      signer?: ethers.Signer
+    ): Promise<Contracts.IValcoreReactiveTrigger>;
+    getContractAt(
+      name: "ValcoreReactiveDispatcher",
+      address: string | ethers.Addressable,
+      signer?: ethers.Signer
+    ): Promise<Contracts.ValcoreReactiveDispatcher>;
+    getContractAt(
+      name: "ValcoreReactiveReceiver",
+      address: string | ethers.Addressable,
+      signer?: ethers.Signer
+    ): Promise<Contracts.ValcoreReactiveReceiver>;
+    getContractAt(
+      name: "ValcoreReactiveTrigger",
+      address: string | ethers.Addressable,
+      signer?: ethers.Signer
+    ): Promise<Contracts.ValcoreReactiveTrigger>;
     getContractAt(
       name: "ValcoreV1",
       address: string | ethers.Addressable,
@@ -255,9 +372,61 @@ declare module "hardhat/types/runtime" {
       signerOrOptions?: ethers.Signer | DeployContractOptions
     ): Promise<Contracts.ReentrancyGuard>;
     deployContract(
+      name: "IValcoreLifecycle",
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.IValcoreLifecycle>;
+    deployContract(
+      name: "AbstractCallback",
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.AbstractCallback>;
+    deployContract(
+      name: "AbstractPayer",
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.AbstractPayer>;
+    deployContract(
+      name: "AbstractReactive",
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.AbstractReactive>;
+    deployContract(
+      name: "IPayable",
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.IPayable>;
+    deployContract(
+      name: "IPayer",
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.IPayer>;
+    deployContract(
+      name: "IReactive",
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.IReactive>;
+    deployContract(
+      name: "ISubscriptionService",
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.ISubscriptionService>;
+    deployContract(
+      name: "ISystemContract",
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.ISystemContract>;
+    deployContract(
       name: "StablecoinMock",
       signerOrOptions?: ethers.Signer | DeployContractOptions
     ): Promise<Contracts.StablecoinMock>;
+    deployContract(
+      name: "IValcoreReactiveTrigger",
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.IValcoreReactiveTrigger>;
+    deployContract(
+      name: "ValcoreReactiveDispatcher",
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.ValcoreReactiveDispatcher>;
+    deployContract(
+      name: "ValcoreReactiveReceiver",
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.ValcoreReactiveReceiver>;
+    deployContract(
+      name: "ValcoreReactiveTrigger",
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.ValcoreReactiveTrigger>;
     deployContract(
       name: "ValcoreV1",
       signerOrOptions?: ethers.Signer | DeployContractOptions
@@ -349,10 +518,75 @@ declare module "hardhat/types/runtime" {
       signerOrOptions?: ethers.Signer | DeployContractOptions
     ): Promise<Contracts.ReentrancyGuard>;
     deployContract(
+      name: "IValcoreLifecycle",
+      args: any[],
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.IValcoreLifecycle>;
+    deployContract(
+      name: "AbstractCallback",
+      args: any[],
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.AbstractCallback>;
+    deployContract(
+      name: "AbstractPayer",
+      args: any[],
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.AbstractPayer>;
+    deployContract(
+      name: "AbstractReactive",
+      args: any[],
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.AbstractReactive>;
+    deployContract(
+      name: "IPayable",
+      args: any[],
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.IPayable>;
+    deployContract(
+      name: "IPayer",
+      args: any[],
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.IPayer>;
+    deployContract(
+      name: "IReactive",
+      args: any[],
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.IReactive>;
+    deployContract(
+      name: "ISubscriptionService",
+      args: any[],
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.ISubscriptionService>;
+    deployContract(
+      name: "ISystemContract",
+      args: any[],
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.ISystemContract>;
+    deployContract(
       name: "StablecoinMock",
       args: any[],
       signerOrOptions?: ethers.Signer | DeployContractOptions
     ): Promise<Contracts.StablecoinMock>;
+    deployContract(
+      name: "IValcoreReactiveTrigger",
+      args: any[],
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.IValcoreReactiveTrigger>;
+    deployContract(
+      name: "ValcoreReactiveDispatcher",
+      args: any[],
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.ValcoreReactiveDispatcher>;
+    deployContract(
+      name: "ValcoreReactiveReceiver",
+      args: any[],
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.ValcoreReactiveReceiver>;
+    deployContract(
+      name: "ValcoreReactiveTrigger",
+      args: any[],
+      signerOrOptions?: ethers.Signer | DeployContractOptions
+    ): Promise<Contracts.ValcoreReactiveTrigger>;
     deployContract(
       name: "ValcoreV1",
       args: any[],

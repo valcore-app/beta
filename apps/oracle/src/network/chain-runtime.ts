@@ -97,6 +97,9 @@ export type RuntimeChainConfig = {
   auditorPrivateKey: string | null;
   auditorAccountAddress: string | null;
 
+  sentinelPrivateKey: string | null;
+  sentinelAccountAddress: string | null;
+
   deployerPrivateKey: string | null;
   deployerAccountAddress: string | null;
 
@@ -120,6 +123,7 @@ export const getRuntimeChainConfig = async (): Promise<RuntimeChainConfig> => {
   const contractAdminPrivateKey = normalizeValue(env.CONTRACT_ADMIN_PRIVATE_KEY);
   const faucetMinterPrivateKey = normalizeValue(env.FAUCET_MINTER_PRIVATE_KEY);
   const auditorPrivateKey = normalizeValue(env.AUDITOR_PRIVATE_KEY);
+  const sentinelPrivateKey = normalizeValue(env.SENTINEL_PRIVATE_KEY);
   const deployerPrivateKey = normalizeValue(env.DEPLOYER_PRIVATE_KEY);
 
   const chainId = requirePositiveInt(env.CHAIN_ID, "CHAIN_ID");
@@ -140,6 +144,7 @@ export const getRuntimeChainConfig = async (): Promise<RuntimeChainConfig> => {
     chainType,
   );
   const auditorAccountAddress = normalizeAddressByChain(env.AUDITOR_ACCOUNT_ADDRESS, chainType);
+  const sentinelAccountAddress = normalizeAddressByChain(env.SENTINEL_ACCOUNT_ADDRESS, chainType);
   const deployerAccountAddress = normalizeAddressByChain(env.DEPLOYER_ACCOUNT_ADDRESS, chainType);
 
   const valcoreAddress = normalizeAddressByChain(env.VALCORE_ADDRESS, chainType);
@@ -182,6 +187,9 @@ export const getRuntimeChainConfig = async (): Promise<RuntimeChainConfig> => {
 
     auditorPrivateKey,
     auditorAccountAddress,
+
+    sentinelPrivateKey,
+    sentinelAccountAddress,
 
     deployerPrivateKey,
     deployerAccountAddress,
@@ -408,6 +416,7 @@ const getRequiredAddressByRole = async (
     | "pauser"
     | "faucet_minter"
     | "auditor"
+    | "sentinel"
     | "deployer",
 ) => {
   const config = await getRuntimeChainConfig();
@@ -417,6 +426,7 @@ const getRequiredAddressByRole = async (
     pauser: config.pauserAccountAddress,
     faucet_minter: config.faucetMinterAccountAddress,
     auditor: config.auditorAccountAddress,
+    sentinel: config.sentinelAccountAddress,
     deployer: config.deployerAccountAddress,
   } as const;
 
@@ -434,6 +444,7 @@ const getRequiredPrivateKeyByRole = async (
     | "pauser"
     | "faucet_minter"
     | "auditor"
+    | "sentinel"
     | "deployer",
 ) => {
   const config = await getRuntimeChainConfig();
@@ -443,6 +454,7 @@ const getRequiredPrivateKeyByRole = async (
     pauser: config.pauserPrivateKey,
     faucet_minter: config.faucetMinterPrivateKey,
     auditor: config.auditorPrivateKey,
+    sentinel: config.sentinelPrivateKey,
     deployer: config.deployerPrivateKey,
   } as const;
 
@@ -460,6 +472,7 @@ export const getRequiredRuntimeStarknetAccount = async (
     | "pauser"
     | "faucet_minter"
     | "auditor"
+    | "sentinel"
     | "deployer",
   rpcUrlOverride?: string,
 ) => {
@@ -479,6 +492,9 @@ export const getRequiredRuntimeStarknetAccount = async (
 
   return new Account({ provider, address, signer: privateKey, cairoVersion: "1" });
 };
+
+
+
 
 
 

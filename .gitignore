@@ -44,3 +44,6 @@ out/
 # local temp artifacts
 /.tmp*
 /Last
+/temp-*.cjs
+/temp_*.json
+/tmp-*.json

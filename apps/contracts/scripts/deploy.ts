@@ -40,6 +40,14 @@ const createFactory = async (name: "StablecoinMock" | "ValcoreV1", wallet: Walle
   return new ContractFactory(artifact.abi, artifact.bytecode, wallet);
 };
 
+const ensureRole = async (contract: any, role: string, account: string, roleLabel: string) => {
+  const hasRole = Boolean(await contract.hasRole(role, account));
+  if (hasRole) return;
+  const tx = await contract.grantRole(role, account);
+  await tx.wait();
+  console.log(`Granted ${roleLabel} to ${account}: ${tx.hash}`);
+};
+
 const getUnresolvedWeekForDeployGuard = async () => {
   const connectionString = normalizeText(process.env.APP_READ_DATABASE_URL);
   if (!connectionString) {
@@ -75,6 +83,8 @@ async function main() {
   const pauserPrivateKey = requireText(process.env.PAUSER_PRIVATE_KEY, "PAUSER_PRIVATE_KEY");
   const pauserAddress = new Wallet(pauserPrivateKey).address;
   const auditorAddress = requireText(process.env.AUDITOR_ADDRESS, "AUDITOR_ADDRESS");
+  const oracleAccountAddress = requireText(process.env.ORACLE_ACCOUNT_ADDRESS, "ORACLE_ACCOUNT_ADDRESS");
+  const auditorAccountAddress = normalizeText(process.env.AUDITOR_ACCOUNT_ADDRESS) || auditorAddress;
 
   const principalRatioBps = Number(process.env.PRINCIPAL_RATIO_BPS || "8000");
   const feeBps = Number(process.env.PROTOCOL_FEE_BPS || "1000");
@@ -134,6 +144,11 @@ async function main() {
   await valcore.waitForDeployment();
   const valcoreAddress = await valcore.getAddress();
 
+  const oracleRole = String(await valcore.ORACLE_ROLE());
+  const auditorRole = String(await valcore.AUDITOR_ROLE());
+  await ensureRole(valcore, oracleRole, oracleAccountAddress, "ORACLE_ROLE");
+  await ensureRole(valcore, auditorRole, auditorAccountAddress, "AUDITOR_ROLE");
+
   const payload = {
     chainKey,
     chainId,
@@ -147,6 +162,7 @@ async function main() {
     treasury: treasuryAddress,
     pauser: pauserAddress,
     auditor: auditorAddress,
+    oracleAccount: oracleAccountAddress,
     deployMockStablecoin: deployMock,
     minDepositWei: minDeposit.toString(),
   };

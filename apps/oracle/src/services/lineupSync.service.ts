@@ -69,9 +69,25 @@ const deterministic = (message: string) => new Error(`DETERMINISTIC: ${message}`
 const transient = (message: string) => new Error(`TRANSIENT: ${message}`);
 
 const normalizeHash = (value: string, chainType: string) => {
-  const raw = String(value ?? "").trim();
-  const strict = chainType === "evm" ? /^0x[a-fA-F0-9]{64}$/ : /^0x[a-fA-F0-9]{1,64}$/;
-  if (!strict.test(raw)) throw deterministic("Invalid tx hash");
+  let raw = String(value ?? "").trim();
+  if (!raw) throw deterministic("Invalid tx hash");
+
+  if (chainType === "starknet") {
+    if (/^[0-9]+$/u.test(raw)) {
+      raw = `0x${BigInt(raw).toString(16)}`;
+    } else if (/^[0-9a-fA-F]{1,64}$/u.test(raw)) {
+      raw = `0x${raw}`;
+    }
+
+    if (!/^0x[0-9a-fA-F]{1,64}$/u.test(raw)) {
+      throw deterministic("Invalid tx hash");
+    }
+    return raw.toLowerCase();
+  }
+
+  if (!/^0x[a-fA-F0-9]{64}$/u.test(raw)) {
+    throw deterministic("Invalid tx hash");
+  }
   return raw.toLowerCase();
 };
 

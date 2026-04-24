@@ -1,0 +1,110 @@
+{
+  "_format": "hh-sol-artifact-1",
+  "contractName": "ISubscriptionService",
+  "sourceName": "contracts/reactive-lib/interfaces/ISubscriptionService.sol",
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "_contract",
+          "type": "address"
+        }
+      ],
+      "name": "debt",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "chain_id",
+          "type": "uint256"
+        },
+        {
+          "internalType": "address",
+          "name": "_contract",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "topic_0",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "topic_1",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "topic_2",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "topic_3",
+          "type": "uint256"
+        }
+      ],
+      "name": "subscribe",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "chain_id",
+          "type": "uint256"
+        },
+        {
+          "internalType": "address",
+          "name": "_contract",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "topic_0",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "topic_1",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "topic_2",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "topic_3",
+          "type": "uint256"
+        }
+      ],
+      "name": "unsubscribe",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "stateMutability": "payable",
+      "type": "receive"
+    }
+  ],
+  "bytecode": "0x",
+  "deployedBytecode": "0x",
+  "linkReferences": {},
+  "deployedLinkReferences": {}
+}

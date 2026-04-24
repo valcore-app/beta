@@ -1,0 +1,218 @@
+{
+  "_format": "hh-sol-artifact-1",
+  "contractName": "IValcoreLifecycle",
+  "sourceName": "contracts/interfaces/IValcoreLifecycle.sol",
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "intentId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "weekId",
+          "type": "uint256"
+        }
+      ],
+      "name": "approveFinalizationWithIntent",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "intentId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "weekId",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint64",
+          "name": "startAt",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "lockAt",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "endAt",
+          "type": "uint64"
+        }
+      ],
+      "name": "createWeekWithIntent",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "intentId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "weekId",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "merkleRoot",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "metadataHash",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "retainedFee",
+          "type": "uint256"
+        }
+      ],
+      "name": "finalizeWeekWithIntent",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "intentId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "weekId",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "merkleRoot",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "metadataHash",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "retainedFee",
+          "type": "uint256"
+        }
+      ],
+      "name": "forceFinalizeWeekWithIntent",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "intentId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "weekId",
+          "type": "uint256"
+        }
+      ],
+      "name": "forceLockWeekWithIntent",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "intentId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "weekId",
+          "type": "uint256"
+        }
+      ],
+      "name": "forceStartWeekWithIntent",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "intentId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "weekId",
+          "type": "uint256"
+        }
+      ],
+      "name": "lockWeekWithIntent",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "intentId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "weekId",
+          "type": "uint256"
+        }
+      ],
+      "name": "rejectFinalizationWithIntent",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "intentId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "weekId",
+          "type": "uint256"
+        }
+      ],
+      "name": "startWeekWithIntent",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ],
+  "bytecode": "0x",
+  "deployedBytecode": "0x",
+  "linkReferences": {},
+  "deployedLinkReferences": {}
+}

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "fs";
+﻿import { existsSync, readFileSync } from "fs";
 import { resolve } from "path";
 import { fileURLToPath } from "url";
 import { Pool, type PoolClient } from "pg";
@@ -48,6 +48,82 @@ const isLocalDbHost = (connectionString: string) => {
   }
 };
 
+const DEFAULT_DB_QUERY_TIMEOUT_MS = 30_000;
+const DEFAULT_DB_STATEMENT_TIMEOUT_MS = 45_000;
+const resolveTimeoutMs = (value: string | undefined, fallback: number) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.floor(parsed);
+};
+const DB_QUERY_TIMEOUT_MS = resolveTimeoutMs(process.env.DB_QUERY_TIMEOUT_MS, DEFAULT_DB_QUERY_TIMEOUT_MS);
+const DB_STATEMENT_TIMEOUT_MS = resolveTimeoutMs(process.env.DB_STATEMENT_TIMEOUT_MS, DEFAULT_DB_STATEMENT_TIMEOUT_MS);
+const TRANSIENT_DB_ERROR_HINTS = [
+  "connection terminated unexpectedly",
+  "connection terminated",
+  "connection ended unexpectedly",
+  "client has encountered a connection error",
+  "socket hang up",
+  "econnreset",
+  "etimedout",
+  "ehostunreach",
+  "server closed the connection unexpectedly",
+];
+
+const TRANSIENT_DB_ERROR_CODES = new Set([
+  "57P01", // admin_shutdown
+  "57P02", // crash_shutdown
+  "57P03", // cannot_connect_now
+  "08000", // connection_exception
+  "08003", // connection_does_not_exist
+  "08006", // connection_failure
+  "08001", // sqlclient_unable_to_establish_sqlconnection
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EPIPE",
+]);
+
+const getDbErrorCode = (error: unknown) => {
+  if (!error || typeof error !== "object") return null;
+  const code = (error as { code?: unknown }).code;
+  if (typeof code !== "string" || !code.trim()) return null;
+  return code.trim().toUpperCase();
+};
+
+const isTransientDbError = (error: unknown) => {
+  const code = getDbErrorCode(error);
+  if (code && TRANSIENT_DB_ERROR_CODES.has(code)) return true;
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error ?? "").toLowerCase();
+  return TRANSIENT_DB_ERROR_HINTS.some((hint) => message.includes(hint));
+};
+
+const resetPools = async () => {
+  await Promise.all([
+    readPool ? readPool.end().catch(() => {}) : Promise.resolve(),
+    writePool ? writePool.end().catch(() => {}) : Promise.resolve(),
+  ]);
+  readPool = null;
+  writePool = null;
+  activeReadUrl = null;
+  activeWriteUrl = null;
+  activeNetworkKey = null;
+  schemaReady = null;
+  poolRefreshInFlight = null;
+};
+
+const withTransientDbRetry = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+  try {
+    return await fn();
+  } catch (error) {
+    if (!isTransientDbError(error)) {
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[db] transient failure detected in ${label}; resetting pools and retrying once: ${message}`);
+    await resetPools();
+    return await fn();
+  }
+};
+
 const resolvePoolSsl = (connectionString: string) => {
   if (isLocalDbHost(connectionString)) {
     return undefined;
@@ -66,6 +142,8 @@ const ensurePool = (url: string) =>
     max: 10,
     idleTimeoutMillis: 10000,
     connectionTimeoutMillis: 10000,
+    query_timeout: DB_QUERY_TIMEOUT_MS,
+    statement_timeout: DB_STATEMENT_TIMEOUT_MS,
     ssl: resolvePoolSsl(url),
   });
 
@@ -182,36 +260,46 @@ const ensureSchema = async () => {
 };
 
 export const queryRead = async <T = any>(sql: string, params: unknown[] = []): Promise<T[]> => {
-  await ensureSchema();
-  const pool = await getReadPool();
-  const result = await pool.query(sql, params);
-  return result.rows as T[];
+  return await withTransientDbRetry("queryRead", async () => {
+    await ensureSchema();
+    const pool = await getReadPool();
+    const result = await pool.query(sql, params);
+    return result.rows as T[];
+  });
 };
 
 export const queryWrite = async <T = any>(sql: string, params: unknown[] = []): Promise<T[]> => {
-  await ensureSchema();
-  const pool = await getWritePool();
-  const result = await pool.query(sql, params);
-  return result.rows as T[];
+  return await withTransientDbRetry("queryWrite", async () => {
+    await ensureSchema();
+    const pool = await getWritePool();
+    const result = await pool.query(sql, params);
+    return result.rows as T[];
+  });
 };
 
 export const withWriteTransaction = async <T>(
   fn: (client: PoolClient) => Promise<T>,
 ): Promise<T> => {
-  await ensureSchema();
-  const pool = await getWritePool();
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const result = await fn(client);
-    await client.query("COMMIT");
-    return result;
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
+  return await withTransientDbRetry("withWriteTransaction", async () => {
+    await ensureSchema();
+    const pool = await getWritePool();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await fn(client);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // Ignore rollback failure when connection is already broken.
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  });
 };
 
 export const closeDb = async () => {
@@ -397,5 +485,10 @@ export type DbJobRun = {
   finished_at?: string | null;
   created_at?: string;
 };
+
+
+
+
+
 
 

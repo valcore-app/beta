@@ -674,11 +674,6 @@ export default function LeaderboardPage() {
     return rows.reduce((sum, row) => sum + (Number(row.weeksPlayed ?? 0) || 0), 0);
   }, [rows]);
 
-  const currentSeasonLabel = useMemo(() => {
-    if (!selectedSeasonId) return "-";
-    return selectedSeasonId;
-  }, [selectedSeasonId]);
-
   const getRowPrimaryMetric = useCallback(
     (row: LeaderboardViewRow) => {
       if (mode === "weekly") return Number(row.weekScore);
@@ -732,11 +727,6 @@ export default function LeaderboardPage() {
     if (!values.length) return null;
     return values.reduce((sum, value) => sum + value, 0) / values.length;
   }, [discoveryRows, mode]);
-
-  const leadingStrategyId = useMemo(() => {
-    const top = discoveryRows.find((row) => Number(row.rank) === 1);
-    return top?.strategyId ?? null;
-  }, [discoveryRows]);
 
   const myScoreGap = useMemo(() => {
     if (!myRow || !myRank || myRank <= 1) return null;
